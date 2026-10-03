@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="WinUIPlayerBehindAcrylic.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:WinUIPlayerBehindAcrylic"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="WinUIPlayerBehindAcrylic">
+    <Grid>
+        <Grid.Resources>
+            <AcrylicBrush x:Key="GridAcrylicBrush"
+                          TintColor="#111111"
+                          TintLuminosityOpacity="0.3"
+                          TintOpacity="0.2"/>
+        </Grid.Resources>
+        <Image Source="Samples/pixelframe-design_pokopia-font-logo.jpg"
+               Stretch="UniformToFill"
+               VerticalAlignment="Center"
+               HorizontalAlignment="Center"/>
+        <Grid x:Name="VideoHost"
+              IsHitTestVisible="False"
+              Loaded="Grid_OnLoaded"
+              Margin="64"/>
+        <Grid>
+            <Grid MaxWidth="512"
+                  MaxHeight="512"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Bottom"
+                  BorderThickness=".5"
+                  BorderBrush="#22FFFFFF"
+                  CornerRadius="8"
+                  Margin="16"
+                  Padding="16"
+                  Background="{ThemeResource GridAcrylicBrush}">
+                <TextBlock Text="Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aenean quis dui ligula."
+                           FontSize="32"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </Grid>
+            <Grid MaxWidth="512"
+                  MaxHeight="512"
+                  HorizontalAlignment="Left"
+                  VerticalAlignment="Top"
+                  BorderThickness=".5"
+                  BorderBrush="#22FFFFFF"
+                  CornerRadius="8"
+                  Margin="16"
+                  Padding="16"
+                  Background="{ThemeResource GridAcrylicBrush}">
+                <StackPanel>
+                    <CheckBox IsChecked="{x:Bind IsVideoEnabled, Mode=TwoWay}" Content="Is Enabled?"/>
+                    <TextBlock Text="Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aenean quis dui ligula."
+                               FontSize="32"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

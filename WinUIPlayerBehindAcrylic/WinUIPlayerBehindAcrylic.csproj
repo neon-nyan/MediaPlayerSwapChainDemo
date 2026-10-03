@@ -1,0 +1,131 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- General Properties -->
+    <OutputType>WinExe</OutputType>
+    <Configurations>Debug;Release</Configurations>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN;DISABLE_XAML_GENERATED_BINDING_DEBUG_OUTPUT;DISABLE_XAML_GENERATED_RESOURCE_REFERENCE_DEBUG_OUTPUT;DISABLE_XAML_GENERATED_BREAK_ON_UNHANDLED_EXCEPTION</DefineConstants>
+    <!-- Assembly Info Properties -->
+    <AssemblyName>WinUIPlayerBehindAcrylic</AssemblyName>
+    <ProductName>WinUIPlayerBehindAcrylic</ProductName>
+    <!-- Versioning -->
+    <LangVersion>14</LangVersion>
+    <!-- Target Settings -->
+    <Platforms>x64</Platforms>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <WindowsSdkPackageVersion>10.0.26100.84</WindowsSdkPackageVersion>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <CsWinRTAotOptimizerEnabled>true</CsWinRTAotOptimizerEnabled>
+    <!-- Debug Settings -->
+    <DebugType>portable</DebugType>
+    <Nullable>enable</Nullable>
+    <!-- WinUI Properties -->
+    <UseWinUI>true</UseWinUI>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- Analyzers Settings -->
+    <EnableAOTAnalyzer>true</EnableAOTAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <!-- Other Settings -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnablePreviewMsixTooling>true</EnablePreviewMsixTooling>
+    <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <ShouldComputeInputPris>true</ShouldComputeInputPris>
+    <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+    <GenerateNeutralResourcesLanguageAttribute>false</GenerateNeutralResourcesLanguageAttribute>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <WebView2EnableCsWinRTProjection>true</WebView2EnableCsWinRTProjection>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$(TargetFramework.Contains('net11.0'))">
+    <!-- .NET 11-preview3 features -->
+    <Features>runtime-async=on</Features>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Manifest Include="app.manifest" />
+  </ItemGroup>
+
+  <!-- Allows WebView2 Library to get linked with the executable.
+         This allows WinRT component of WebView2 to get initialized at start-up.
+    -->
+  <PropertyGroup Label="Globals">
+    <WebView2LoaderPreference>Static</WebView2LoaderPreference>
+    <WebView2UseDispatchAdapter>True</WebView2UseDispatchAdapter>
+    <WV2WinRTPlatformReferencesLevel>foundation</WV2WinRTPlatformReferencesLevel>
+    <WV2WinRTWrapWebViewTypes>True</WV2WinRTWrapWebViewTypes>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <OutputType>Exe</OutputType>
+    <TrimMode>full</TrimMode>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <Optimize>True</Optimize>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(PublishAot)' != 'true'">
+    <CetCompat>false</CetCompat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(PublishAot)' == 'true'">
+    <!-- Publish Options -->
+    <DefineConstants>$(DefineConstants);AOT</DefineConstants>
+    <RunAOTCompilation>true</RunAOTCompilation>
+    <GitSkipCache>true</GitSkipCache>
+
+    <!-- Compilation and Optimization -->
+    <Deterministic>true</Deterministic>
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+    <OptimizationPreference>Speed</OptimizationPreference>
+    <IlcDisableReflection>false</IlcDisableReflection>
+    <IlcDisableSingleFile>true</IlcDisableSingleFile>
+    <IlcTrimMetadata>true</IlcTrimMetadata>
+    <TrimMetadata>true</TrimMetadata>
+    <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
+    <FoldIdenticalMethodBodies>true</FoldIdenticalMethodBodies>
+    <UseWindowsThreadPool>true</UseWindowsThreadPool>
+
+    <!-- Debugging and Metadata -->
+    <DebuggerSupport>false</DebuggerSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <StackTraceSupport>true</StackTraceSupport>
+    <TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
+    <IlcGenerateMstatFile>false</IlcGenerateMstatFile>
+    <IlcGenerateDgmlFile>false</IlcGenerateDgmlFile>
+
+    <!-- Security and Resource Management -->
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <EnableUnsafeUTF7Encoding>false</EnableUnsafeUTF7Encoding>
+    <EventSourceSupport>false</EventSourceSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <MetricsSupport>false</MetricsSupport>
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
+    <XmlResolverIsNetworkingEnabledByDefault>false</XmlResolverIsNetworkingEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FFmpegInteropX" Version="2.1.0.81200" />
+
+    <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.4.0" />
+    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.3.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.4-experimental" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hi3Helper.Win32\Hi3Helper.Win32.csproj" />
+    <ProjectReference Include="..\Hi3Helper.Win32\WinRT\Hi3Helper.Win32.WinRT.csproj" />
+    <ProjectReference Include="..\Utility\Utility.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Samples\*">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

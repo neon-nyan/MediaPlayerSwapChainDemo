@@ -1,0 +1,23 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Publish" />
+    <BuildType Name="Release" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="Hi3Helper.Win32/Hi3Helper.Win32.csproj">
+    <BuildType Solution="Publish|*" Project="Release" />
+    <Platform Project="x64" />
+  </Project>
+  <Project Path="Hi3Helper.Win32/WinRT/Hi3Helper.Win32.WinRT.csproj">
+    <BuildType Solution="Publish|*" Project="Release" />
+    <Platform Project="x64" />
+  </Project>
+  <Project Path="Utility/Utility.csproj">
+    <BuildType Solution="Publish|*" Project="Release" />
+    <Platform Project="x64" />
+  </Project>
+  <Project Path="WinUIPlayerBehindAcrylic/WinUIPlayerBehindAcrylic.csproj">
+    <Platform Project="x64" />
+  </Project>
+</Solution>

@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "WinUIPlayerBehindAcrylic": {
+      "commandName": "Project",
+      "nativeDebugging": false,
+      "hotReloadEnabled": true
+    }
+  }
+}
