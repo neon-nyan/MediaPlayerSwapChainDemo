@@ -62,7 +62,6 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
     public void Initialize(Grid host, CompositionStretch stretch = CompositionStretch.UniformToFill)
     {
         _host = host;
-        _host.SizeChanged += HostOnSizeChanged;
 
         _compositor = ElementCompositionPreview.GetElementVisual(host).Compositor;
         _videoBrush = _compositor.CreateSurfaceBrush();
@@ -82,6 +81,8 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         ElementCompositionPreview.SetElementChildVisual(host, _videoVisual);
 
         CreateDeviceResources();
+
+        _host!.SizeChanged += HostOnSizeChanged;
     }
 
     public void ToggleVideo(bool isEnable)
@@ -92,18 +93,21 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
     // ReSharper disable once AsyncVoidMethod
     public void Open(Uri uri, bool isLoop = true)
     {
-        DisposeMediaPlayer();
-        MediaPlayer = new MediaPlayer
+        using (_renderLock.EnterScope())
         {
-            IsLoopingEnabled = isLoop
-        };
+            DisposeMediaPlayer();
+            MediaPlayer = new MediaPlayer
+            {
+                IsLoopingEnabled = isLoop
+            };
 
-        _ffmpegSource = GetMediaSource(uri, MediaPlayer).GetAwaiter().GetResult();
+            _ffmpegSource = GetMediaSource(uri, MediaPlayer).GetAwaiter().GetResult();
 
-        MediaPlayer.MediaEnded                += MediaPlayer_OnMediaEnded;
-        MediaPlayer.VideoFrameAvailable       += MediaPlayer_OnVideoFrameAvailable;
-        MediaPlayer.IsVideoFrameServerEnabled =  true;
-        MediaPlayer.Play();
+            MediaPlayer.MediaEnded                += MediaPlayer_OnMediaEnded;
+            MediaPlayer.VideoFrameAvailable       += MediaPlayer_OnVideoFrameAvailable;
+            MediaPlayer.IsVideoFrameServerEnabled =  true;
+            MediaPlayer.Play();
+        }
     }
 
     private static async Task<FFmpegMediaSource> GetMediaSource(Uri uri, MediaPlayer mediaPlayer)
