@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using System.Threading;
@@ -8,11 +9,14 @@ using Windows.Graphics.DirectX.Direct3D11;
 using Windows.Media.Playback;
 using FFmpegInteropX;
 using Hi3Helper.Win32.ManagedTools;
+using Hi3Helper.Win32.Native.Enums.D2D;
 using Hi3Helper.Win32.Native.Enums.D3D;
 using Hi3Helper.Win32.Native.Enums.DXGI;
+using Hi3Helper.Win32.Native.Interfaces.D2D;
 using Hi3Helper.Win32.Native.Interfaces.D3D;
 using Hi3Helper.Win32.Native.Interfaces.DXGI;
 using Hi3Helper.Win32.Native.LibraryImport;
+using Hi3Helper.Win32.Native.Structs.D2D;
 using Hi3Helper.Win32.Native.Structs.DXGI;
 using Microsoft.Graphics.Canvas;
 using Microsoft.UI.Composition;
@@ -240,7 +244,7 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         using (_renderLock.EnterScope())
         {
             _d3dDevice = CreateD3DDeviceFromSharedCanvasDevice() ??
-                         CreateD3DDevice();
+                         CreateD3DDevice(out _, out _);
 
             DXGI_SWAP_CHAIN_DESC1 desc = CreateSwapChainDescription(RenderWidth, RenderHeight);
 
@@ -298,12 +302,12 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
                                              out _) ? null : d3d11Device;
     }
 
-    // private static unsafe ID3D11Device CreateD3DDevice(out ID2D1Factory2 d2d1Factory, out ID2D1Device1 d2d1Device)
-    private static unsafe ID3D11Device CreateD3DDevice()
+    private static unsafe ID3D11Device CreateD3DDevice(out ID2D1Factory2 d2d1Factory, out ID2D1Device1 d2d1Device)
+    // private static unsafe ID3D11Device CreateD3DDevice()
     {
         // -- Create new D3D11 Device
-        // Unsafe.SkipInit(out d2d1Factory);
-        // Unsafe.SkipInit(out d2d1Device);
+        Unsafe.SkipInit(out d2d1Factory);
+        Unsafe.SkipInit(out d2d1Device);
 
         const uint D3D11_SDK_VERSION = 7;
         Span<D3D_FEATURE_LEVEL> levels =
@@ -349,7 +353,6 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         }
         Marshal.ThrowExceptionForHR(hr);
 
-        /*
         // -- Create D2D1 Device
         D2D1_FACTORY_OPTIONS d2d1FactoryOpts = new()
         {
@@ -364,7 +367,6 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         Marshal.ThrowExceptionForHR(hr);
         ComMarshal<ID2D1Factory2>.TryCreateComObjectFromReference(d2d1FactoryP, out d2d1Factory!, out _);
         d2d1Factory.CreateDevice(dxgiDevice!, out d2d1Device);
-        */
 
         ComMarshal<ID3D11Device>.TryCreateComObjectFromReference(deviceP, out ID3D11Device? device, out _);
         return device!;
@@ -528,8 +530,8 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
                 _swapChain = null;
                 // _d3dDevice?.Dispose();
                 _d3dDevice = null;
-                // _d3dDevice = CreateD3DDevice(out _, out _);
-                _d3dDevice = CreateD3DDevice();
+                _d3dDevice = CreateD3DDevice(out _, out _);
+                // _d3dDevice = CreateD3DDevice();
 
                 DXGI_SWAP_CHAIN_DESC1 desc = CreateSwapChainDescription(RenderWidth, RenderHeight);
                 _swapChain = CreateSwapChainForComposition(_d3dDevice!, desc);
