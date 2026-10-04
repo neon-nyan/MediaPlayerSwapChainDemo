@@ -1,13 +1,3 @@
-using System;
-using System.Numerics;
-using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.Marshalling;
-using System.Threading;
-using System.Threading.Tasks;
-using Windows.Foundation;
-using Windows.Graphics.DirectX.Direct3D11;
-using Windows.Media.Playback;
-using FFmpegInteropX;
 using Hi3Helper.Win32.ManagedTools;
 using Hi3Helper.Win32.Native.Enums.D3D;
 using Hi3Helper.Win32.Native.Enums.DXGI;
@@ -18,26 +8,35 @@ using Hi3Helper.Win32.Native.Structs.D3D;
 using Hi3Helper.Win32.Native.Structs.DXGI;
 using Microsoft.Graphics.Canvas;
 using Microsoft.UI.Composition;
-using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
-using Utility.Log;
+using System;
+using System.Numerics;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.Marshalling;
+using System.Threading;
+using Windows.Foundation;
+using Windows.Graphics.DirectX.Direct3D11;
+using Hi3Helper.Win32.Native.Interfaces.CompositorInterop;
+using Hi3Helper.Win32.Native.Structs;
+using Microsoft.Extensions.Logging;
+using Microsoft.UI.Xaml;
 using WinRT;
-using WinUIPlayerBehindAcrylic.Native;
 
+// ReSharper disable IdentifierTypo
 // ReSharper disable InconsistentNaming
 
 namespace WinUIPlayerBehindAcrylic;
 
-internal sealed class MediaFoundationPresenter : IVideoFramePresenter
+public sealed class MediaFoundationPresenter : IVideoFramePresenter
 {
-    public event EventHandler? MediaEnded;
+    private static readonly Guid IID_IDXGISurface = typeof(IDXGISurface).GUID;
 
     private int RenderWidth;
     private int RenderHeight;
 
     private readonly Lock _renderLock = new();
 
-    private Grid? _host;
+    private FrameworkElement? _host;
 
     private Compositor?                        _compositor;
     private SpriteVisual?                      _videoVisual;
@@ -45,22 +44,26 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
     private CompositionDrawingSurface?         _compositionSurface;
     private CompositionGraphicsDevice?         _compositionGraphicsDevice;
     private ICompositionDrawingSurfaceInterop? _drawingSurfaceInterop;
-
-    public  MediaPlayer?       MediaPlayer;
-    private FFmpegMediaSource? _ffmpegSource;
+    private nint                               _drawingSurfaceInteropAbi;
 
     private ID3D11Device?        _d3dDevice;
     private ID3D11DeviceContext? _d3dContext;
+    private nint                 _d3dContextAbi;
     private nint                 _frameTexture;
     private IDirect3DSurface?    _frameSurface;
+    private nint                 _frameSurfaceAbi;
 
     private bool _disposed;
     private bool _recreating;
-    private bool _hasFrame;
 
-    public void Initialize(Grid host, CompositionStretch stretch = CompositionStretch.UniformToFill)
+    private ILogger? _logger;
+
+    public void Initialize(FrameworkElement   host,
+                           CompositionStretch stretch = CompositionStretch.UniformToFill,
+                           ILogger?           logger  = null)
     {
-        _host = host;
+        _logger = logger;
+        _host   = host;
 
         _compositor = ElementCompositionPreview.GetElementVisual(host).Compositor;
         _videoBrush = _compositor.CreateSurfaceBrush();
@@ -81,97 +84,21 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         // The brush handles host resizing; video textures keep their source resolution.
     }
 
-    public void ToggleVideo(bool isEnable)
+    public void Toggle(bool isEnable)
     {
         if (_host != null && !_disposed)
             ElementCompositionPreview.SetElementChildVisual(_host, isEnable ? _videoVisual : null);
     }
 
-    // ReSharper disable once AsyncVoidMethod
-    public async Task OpenAsync(Uri uri, bool isLoop = true, CancellationToken token = default)
+    private void CalculateFrameSize(int requestedWidth, int requestedHeight)
     {
-        DisposeMediaPlayer();
-        MediaPlayer = new MediaPlayer
-        {
-            IsLoopingEnabled = isLoop
-        };
-
-        _ffmpegSource = await GetMediaSourceAsync(uri, MediaPlayer);
-
-        MediaPlayer.MediaEnded                += MediaPlayer_OnMediaEnded;
-        MediaPlayer.VideoFrameAvailable       += MediaPlayer_OnVideoFrameAvailable;
-        MediaPlayer.IsVideoFrameServerEnabled =  true;
-        MediaPlayer.Play();
-    }
-
-    private static async Task<FFmpegMediaSource> GetMediaSourceAsync(Uri uri, MediaPlayer mediaPlayer)
-    {
-        MediaSourceConfig ffmpegConfig = new()
-        {
-            Video =
-            {
-                MaxDecoderThreads     = (uint)Environment.ProcessorCount,
-                VideoOutputAllow10bit = true,
-                VideoOutputAllowBgra8 = true,
-                VideoOutputAllowNv12  = true
-            },
-            General =
-            {
-                ReadAheadBufferEnabled  = true,
-                ReadAheadBufferDuration = TimeSpan.FromSeconds(15)
-            }
-        };
-
-        FFmpegMediaSource source =
-            await (uri.IsFile
-                ? FFmpegMediaSource.CreateFromFileAsync(uri.LocalPath)
-                : FFmpegMediaSource.CreateFromUriAsync(uri.ToString(), ffmpegConfig));
-        await source.OpenWithMediaPlayerAsync(mediaPlayer);
-        return source;
-    }
-
-    private void CalculateFrameSize()
-    {
-        int width  = (int)(MediaPlayer?.PlaybackSession.NaturalVideoWidth ?? 0);
-        int height = (int)(MediaPlayer?.PlaybackSession.NaturalVideoHeight ?? 0);
-
-        if (width <= 0 || height <= 0)
+        if (requestedWidth <= 0 || requestedHeight <= 0)
             return;
 
-        if (_frameSurface != null && width == RenderWidth && height == RenderHeight)
+        if (_frameSurface != null && requestedWidth == RenderWidth && requestedHeight == RenderHeight)
             return;
 
-        ResizeDrawingSurface(width, height);
-    }
-
-    private void DisposeMediaPlayer()
-    {
-        MediaPlayer?       mediaPlayer;
-        FFmpegMediaSource? ffmpegSource;
-        using (_renderLock.EnterScope())
-        {
-            mediaPlayer   = MediaPlayer;
-            ffmpegSource  = _ffmpegSource;
-            MediaPlayer   = null;
-            _ffmpegSource = null;
-            _hasFrame     = false;
-
-            if (mediaPlayer != null)
-            {
-                mediaPlayer.MediaEnded          -= MediaPlayer_OnMediaEnded;
-                mediaPlayer.VideoFrameAvailable -= MediaPlayer_OnVideoFrameAvailable;
-            }
-        }
-
-        // Closing playback may wait for a frame callback which needs _renderLock.
-        try
-        {
-            mediaPlayer?.Dispose();
-        }
-        finally
-        {
-            ffmpegSource?.Dispose();
-        }
+        ResizeDrawingSurface(requestedWidth, requestedHeight);
     }
 
     public void Dispose()
@@ -184,28 +111,21 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
             _disposed = true;
         }
 
-        try
+        using (_renderLock.EnterScope())
         {
-            DisposeMediaPlayer();
-        }
-        finally
-        {
-            using (_renderLock.EnterScope())
-            {
-                if (_host != null)
-                    ElementCompositionPreview.SetElementChildVisual(_host, null);
+            if (_host != null)
+                ElementCompositionPreview.SetElementChildVisual(_host, null);
 
-                ReleaseDeviceResources();
-                _videoVisual?.Dispose();
-                _videoBrush?.Dispose();
+            ReleaseDeviceResources();
+            _videoVisual?.Dispose();
+            _videoBrush?.Dispose();
 
-                _videoVisual = null;
-                _videoBrush  = null;
-            }
+            _videoVisual = null;
+            _videoBrush  = null;
         }
     }
 
-    private void CreateDeviceResources()
+    private unsafe void CreateDeviceResources()
     {
         using (_renderLock.EnterScope())
         {
@@ -224,15 +144,17 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
                 d3d11Mt.SetMultithreadProtected(1);
             }
 
+            // Get the reference of the ID3D11DeviceContext (+1 ref)
+            _d3dContextAbi = (nint)ComInterfaceMarshaller<ID3D11DeviceContext>.ConvertToUnmanaged(_d3dContext);
+
             _compositionGraphicsDevice = CreateCompositionGraphicsDevice(_compositor!, _d3dDevice);
             _compositionSurface = _compositionGraphicsDevice.CreateDrawingSurface(
                 new Size(0, 0),
                 Microsoft.Graphics.DirectX.DirectXPixelFormat.B8G8R8A8UIntNormalized,
                 Microsoft.Graphics.DirectX.DirectXAlphaMode.Premultiplied);
 
-            nint surfaceP = ((IWinRTObject)_compositionSurface).NativeObject.ThisPtr;
             // This reference is borrowed from the projected surface.
-
+            nint surfaceP = ((IWinRTObject)_compositionSurface).NativeObject.ThisPtr;
             if (!ComMarshal<ICompositionDrawingSurfaceInterop>
                     .TryCreateComObjectFromReference(surfaceP,
                                                      out _drawingSurfaceInterop,
@@ -241,6 +163,10 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
             {
                 throw ex;
             }
+
+            // Query borrowed reference from drawing surface interop (+1 ref).
+            int hr = Marshal.QueryInterface(surfaceP, typeof(ICompositionDrawingSurfaceInterop).GUID, out _drawingSurfaceInteropAbi);
+            Marshal.ThrowExceptionForHR(hr);
             _videoBrush!.Surface = _compositionSurface;
         }
     }
@@ -370,47 +296,24 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         }
     }
 
-    private void MediaPlayer_OnMediaEnded(MediaPlayer sender, object args)
-    {
-        _host?.DispatcherQueue.TryEnqueue(() =>
-        {
-            if (!_disposed)
-                MediaEnded?.Invoke(this, EventArgs.Empty);
-        });
-    }
-
-    private void MediaPlayer_OnVideoFrameAvailable(
-        MediaPlayer sender,
-        object      args)
-    {
-        using (_renderLock.EnterScope())
-        {
-            if (_disposed ||
-                _recreating ||
-                _drawingSurfaceInterop is null)
-            {
-                return;
-            }
-
-            _hasFrame = true;
-            DrawFrame();
-        }
-    }
-
-    private void DrawFrame()
+    public void Draw(Direct3DSurfaceConsumer surfaceConsumer,
+                     int                     canvasWidth,
+                     int                     canvasHeight)
     {
         try
         {
-            CalculateFrameSize();
+            if (_disposed || _drawingSurfaceInterop is null)
+                return;
+
+            CalculateFrameSize(canvasWidth, canvasHeight);
             if (_frameSurface == null)
                 return;
 
-            MediaPlayer!.CopyFrameToVideoSurface(_frameSurface);
-
-            int hr = _drawingSurfaceInterop!.BeginDraw(nint.Zero,
-                                                       typeof(IDXGISurface).GUID,
-                                                       out nint updateP,
-                                                       out CompositionPoint offset);
+            surfaceConsumer(_frameSurface);
+            int hr = _drawingSurfaceInterop.BeginDraw(nint.Zero,
+                                                      typeof(IDXGISurface).GUID,
+                                                      out nint updateP,
+                                                      out POINTL offset);
             Marshal.ThrowExceptionForHR(hr);
 
             nint updateTextureP = nint.Zero;
@@ -421,10 +324,10 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
 
                 _d3dContext!.CopySubresourceRegion(updateTextureP,
                                                    0,
-                                                   (uint)offset.X,
-                                                   (uint)offset.Y,
+                                                   (uint)offset.x,
+                                                   (uint)offset.y,
                                                    0,
-                                                   _frameTexture!,
+                                                   _frameTexture,
                                                    0,
                                                    nint.Zero);
 
@@ -436,6 +339,49 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
                 if (updateTextureP != nint.Zero) Marshal.Release(updateTextureP);
                 if (updateP != nint.Zero) Marshal.Release(updateP);
                 Marshal.ThrowExceptionForHR(_drawingSurfaceInterop.EndDraw());
+            }
+        }
+        catch (Exception ex) when (IsDeviceLost(ex.HResult))
+        {
+            QueueDeviceRecreation();
+        }
+    }
+
+    public unsafe void DrawUnsafe(
+        Direct3DSurfaceConsumerUnsafe surfaceConsumerUnsafe,
+        int                           canvasWidth,
+        int                           canvasHeight)
+    {
+        try
+        {
+            if (_disposed)
+                return;
+
+            CalculateFrameSize(canvasWidth, canvasHeight);
+            if (_frameSurfaceAbi == nint.Zero ||
+                _drawingSurfaceInteropAbi == nint.Zero)
+                return;
+
+            surfaceConsumerUnsafe(_frameSurfaceAbi);
+            ((delegate* unmanaged[MemberFunction]<nint, nint, ref readonly Guid, out nint, out POINTL, int>)(*(*(void***)_drawingSurfaceInteropAbi + 3)))
+                (_drawingSurfaceInteropAbi, nint.Zero, in IID_IDXGISurface, out nint updateP, out POINTL offset);
+
+            nint updateTextureP = nint.Zero;
+            try
+            {
+                Marshal.QueryInterface(updateP, typeof(ID3D11Texture2D).GUID, out updateTextureP);
+                ((delegate* unmanaged[MemberFunction]<nint, nint, uint, uint, uint, uint, nint, uint, nint, void>)(*(*(void***)_d3dContextAbi + 46)))
+                    (_d3dContextAbi, updateTextureP, 0, (uint)offset.x, (uint)offset.y, 0, _frameTexture, 0, nint.Zero);
+                ((delegate* unmanaged[MemberFunction]<nint, void>)(*(*(void***)_d3dContextAbi + 111)))
+                    (_d3dContextAbi);
+            }
+            finally
+            {
+                // The update texture belongs to this BeginDraw/EndDraw pair only.
+                if (updateTextureP != nint.Zero) Marshal.Release(updateTextureP);
+                if (updateP != nint.Zero) Marshal.Release(updateP);
+                ((delegate* unmanaged[MemberFunction]<nint, int>)(*(*(void***)_drawingSurfaceInteropAbi + 4)))
+                    (_drawingSurfaceInteropAbi);
             }
         }
         catch (Exception ex) when (IsDeviceLost(ex.HResult))
@@ -497,6 +443,7 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
             Marshal.ThrowExceptionForHR(hr);
 
             _frameSurface = MarshalInterface<IDirect3DSurface>.FromAbi(graphicsSurfaceP);
+            Marshal.QueryInterface(graphicsSurfaceP, typeof(IDirect3DSurface).GUID, out _frameSurfaceAbi);
         }
         catch
         {
@@ -513,10 +460,11 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
 
     private void ReleaseFrameSurface()
     {
+        if (_frameTexture != nint.Zero) Marshal.Release(Interlocked.Exchange(ref _frameTexture,       nint.Zero));
+        if (_frameSurfaceAbi != nint.Zero) Marshal.Release(Interlocked.Exchange(ref _frameSurfaceAbi, nint.Zero));
+
         _frameSurface?.Dispose();
         _frameSurface = null;
-
-        if (_frameTexture != nint.Zero) Marshal.Release(Interlocked.Exchange(ref _frameTexture, nint.Zero));
         _d3dContext?.Flush();
     }
 
@@ -531,8 +479,6 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
             {
                 ReleaseDeviceResources();
                 CreateDeviceResources();
-                if (_hasFrame)
-                    DrawFrame();
             }
             finally
             {
@@ -546,13 +492,14 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         int height)
     {
         ReleaseFrameSurface();
-        int hr = _drawingSurfaceInterop!.Resize(new CompositionSize { Width = width, Height = height });
+        int hr = _drawingSurfaceInterop!.Resize(new SIZEL { Width = width, Height = height });
         Marshal.ThrowExceptionForHR(hr);
 
         RenderWidth  = width;
         RenderHeight = height;
         CreateFrameSurface();
-        Logger.LogWriteLine($"Video Surface Resized: {width}x{height}", LogType.Debug);
+
+        _logger?.LogDebug("Video Surface Resized: {width}x{height}", width, height);
     }
 
     private void ReleaseDeviceResources()
@@ -561,11 +508,16 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         ReleaseFrameSurface();
         _drawingSurfaceInterop = null;
 
+        // As we performed QueryInterface from the origin ABI. We release this one (but not with the origin too).
+        if (_drawingSurfaceInteropAbi != nint.Zero) Marshal.Release(Interlocked.Exchange(ref _drawingSurfaceInteropAbi, nint.Zero));
+
         _compositionSurface?.Dispose();
         _compositionSurface = null;
         _compositionGraphicsDevice?.Dispose();
         _compositionGraphicsDevice = null;
 
+        // Release the queried ID3D11DeviceContext
+        if (_d3dContextAbi != nint.Zero) Marshal.Release(Interlocked.Exchange(ref _d3dContextAbi, nint.Zero));
         _d3dContext = null;
         _d3dDevice  = null;
     }

@@ -1,18 +1,27 @@
 ﻿using Microsoft.UI.Composition;
-using Microsoft.UI.Xaml.Controls;
 using System;
-using System.Threading;
-using System.Threading.Tasks;
+using Windows.Graphics.DirectX.Direct3D11;
+using Microsoft.Extensions.Logging;
+using Microsoft.UI.Xaml;
 
 namespace WinUIPlayerBehindAcrylic;
 
-internal interface IVideoFramePresenter : IDisposable
+public delegate void Direct3DSurfaceConsumer(IDirect3DSurface surface);
+public delegate void Direct3DSurfaceConsumerUnsafe(nint surfaceAbi);
+
+public interface IVideoFramePresenter : IDisposable
 {
-    event EventHandler MediaEnded;
+    void Initialize(FrameworkElement   host,
+                    CompositionStretch stretch = CompositionStretch.UniformToFill,
+                    ILogger?           logger  = null);
 
-    void Initialize(Grid host, CompositionStretch stretch = CompositionStretch.UniformToFill);
+    void Toggle(bool isEnable);
 
-    void ToggleVideo(bool isEnable);
+    void Draw(Direct3DSurfaceConsumer surfaceConsumer,
+              int                     canvasWidth,
+              int                     canvasHeight);
 
-    Task OpenAsync(Uri uri, bool isLoop = true, CancellationToken token = default);
+    void DrawUnsafe(Direct3DSurfaceConsumerUnsafe surfaceConsumerUnsafe,
+                    int                           canvasWidth,
+                    int                           canvasHeight);
 }
