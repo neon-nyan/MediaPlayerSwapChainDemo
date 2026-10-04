@@ -393,24 +393,22 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         IDXGISwapChain3 swapChain)
     {
         nint compositorAbi = ((IWinRTObject)compositor).NativeObject.ThisPtr;
-        Marshal.QueryInterface(compositorAbi, IID_ICompositorInterop, out nint compositorInteropP);
+        if (!ComMarshal<ICompositorSwapChainInterop>
+                .TryCreateComObjectFromReference(compositorAbi,
+                                                 out ICompositorSwapChainInterop? compositorSwapChainInterop,
+                                                 out Exception? ex,
+                                                 false))
+        {
+            throw ex;
+        }
 
         nint surfaceAbi     = nint.Zero;
         nint dxgiSwapChainP = nint.Zero;
         try
         {
-            void** compositorInteropVtable = *(void***)compositorInteropP;
-
             dxgiSwapChainP = (nint)ComInterfaceMarshaller<IDXGISwapChain3>.ConvertToUnmanaged(swapChain);
-            var createCompositionSurfaceForSwapChain =
-                (delegate* unmanaged[Stdcall]<
-                    nint,     // this
-                    nint,     // IDXGISwapChain1*
-                    out nint, // ICompositionSurface**
-                    int       // HRESULT
-                    >)compositorInteropVtable[5]; // UNDOCUMENTED: ICompositorInterop.CreateCompositionSurfaceForSwapChain
+            compositorSwapChainInterop.CreateCompositionSurfaceForSwapChain(dxgiSwapChainP, out surfaceAbi);
 
-            createCompositionSurfaceForSwapChain(compositorInteropP, dxgiSwapChainP, out surfaceAbi);
             ICompositionSurface compositionSurface = MarshalInterface<ICompositionSurface>.FromAbi(surfaceAbi);
             return compositionSurface;
         }
@@ -418,7 +416,6 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
         {
             if (surfaceAbi != nint.Zero) Marshal.Release(surfaceAbi);
             if (dxgiSwapChainP != nint.Zero) Marshal.Release(dxgiSwapChainP);
-            if (compositorInteropP != nint.Zero) Marshal.Release(compositorInteropP);
         }
     }
 
@@ -568,24 +565,30 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
 }
 
 [GeneratedComInterface]
+[Guid("FC084699-67D8-40E1-ADE7-08901D84FFDA")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal partial interface ICompositorSwapChainInterop : ICompositorInterop
+{
+    [PreserveSig]
+    int CreateCompositionSurfaceForHandle(
+        nint     swapChainHandle,
+        out nint compositionSurfaceResult);
+
+    [PreserveSig]
+    int CreateCompositionSurfaceForSwapChain(
+        nint     swapChain,
+        out nint compositionSurfaceResult);
+}
+
+[GeneratedComInterface]
 [Guid("FAB19398-6D19-4D8A-B752-8F096C396069")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 internal partial interface ICompositorInterop
 {
     [PreserveSig]
-    int CreateCompositionSurfaceForHandle(
-        nint     swapChainHandle,
-        out nint result);
-
-    [PreserveSig]
-    int CreateCompositionSurfaceForSwapChain(
-        nint     swapChain,
-        out nint result);
-
-    [PreserveSig]
     int CreateGraphicsDevice(
         nint     renderingDevice,
-        out nint result);
+        out nint compositionGraphicsDeviceResult);
 }
 
 [GeneratedComInterface]
