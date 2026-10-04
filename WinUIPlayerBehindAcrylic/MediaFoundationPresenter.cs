@@ -25,6 +25,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Utility.Log;
 using WinRT;
+using WinUIPlayerBehindAcrylic.Native;
 
 // ReSharper disable InconsistentNaming
 
@@ -32,9 +33,6 @@ namespace WinUIPlayerBehindAcrylic;
 
 internal sealed class MediaFoundationPresenter : IVideoFramePresenter
 {
-    private static readonly Guid IID_ICompositorInterop = new("FAB19398-6D19-4D8A-B752-8F096C396069");
-    private static readonly Guid IID_ID3D11Device       = new("DB6F6DDB-AC77-4E88-8253-819DF9BBF140");
-
     public event EventHandler? MediaEnded;
 
     private       int RenderWidth   = 1920;
@@ -293,7 +291,7 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
             return null;
         }
 
-        int hr = access.GetInterface(in IID_ID3D11Device, out nint d3d11DeviceFromSharedCanvasP);
+        int hr = access.GetInterface(typeof(ID3D11Device).GUID, out nint d3d11DeviceFromSharedCanvasP);
         if (hr != 0) return null;
 
         return !ComMarshal<ID3D11Device>
@@ -562,42 +560,4 @@ internal sealed class MediaFoundationPresenter : IVideoFramePresenter
             CreateBackBufferSurfaces();
         }
     }
-}
-
-[GeneratedComInterface]
-[Guid("FC084699-67D8-40E1-ADE7-08901D84FFDA")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal partial interface ICompositorSwapChainInterop : ICompositorInterop
-{
-    [PreserveSig]
-    int CreateCompositionSurfaceForHandle(
-        nint     swapChainHandle,
-        out nint compositionSurfaceResult);
-
-    [PreserveSig]
-    int CreateCompositionSurfaceForSwapChain(
-        nint     swapChain,
-        out nint compositionSurfaceResult);
-}
-
-[GeneratedComInterface]
-[Guid("FAB19398-6D19-4D8A-B752-8F096C396069")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal partial interface ICompositorInterop
-{
-    [PreserveSig]
-    int CreateGraphicsDevice(
-        nint     renderingDevice,
-        out nint compositionGraphicsDeviceResult);
-}
-
-[GeneratedComInterface]
-[Guid("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal unsafe partial interface IDirect3DDxgiInterfaceAccess
-{
-    [PreserveSig]
-    int GetInterface(
-        in  Guid iid,
-        out nint ppv);
 }
