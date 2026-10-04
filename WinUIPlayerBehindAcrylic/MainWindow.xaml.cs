@@ -18,22 +18,28 @@ public sealed partial class MainWindow : Window
 
     private bool IsVideoEnabled
     {
-        get => true;
+        get;
         set
         {
+            field = value;
             _videoFramePresenter.ToggleVideo(value);
             VideoHost.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
         }
-    }
+    } = true;
 
     public MainWindow()
     {
         _videoFramePresenter = new MediaFoundationPresenter();
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
+
+        Closed += (_, _) =>
+        {
+            _videoFramePresenter.Dispose();
+        };
     }
 
-    private void Grid_OnLoaded(object sender, RoutedEventArgs e)
+    private async void Grid_OnLoaded(object sender, RoutedEventArgs e)
     {
         string[] samples =
             Directory.GetFiles(Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? "", "Samples"),
@@ -48,12 +54,12 @@ public sealed partial class MainWindow : Window
         int index = 0;
         Random.Shared.Shuffle(samples);
 
-        _videoFramePresenter.Initialize((Grid)sender, CompositionStretch.Uniform);
+        _videoFramePresenter.Initialize((Grid)sender);
         _videoFramePresenter.MediaEnded += PlayNextLoop;
-        _videoFramePresenter.Open(new Uri(samples[index]), false);
+        await _videoFramePresenter.OpenAsync(new Uri(samples[index]), false);
         return;
 
-        void PlayNextLoop(object? se, EventArgs args)
+        async void PlayNextLoop(object? se, EventArgs args)
         {
             index++;
             if (index > samples.Length - 1)
@@ -62,7 +68,7 @@ public sealed partial class MainWindow : Window
                 Random.Shared.Shuffle(samples);
             }
 
-            _videoFramePresenter.Open(new Uri(samples[index]), false);
+            await _videoFramePresenter.OpenAsync(new Uri(samples[index]), false);
         }
     }
 }

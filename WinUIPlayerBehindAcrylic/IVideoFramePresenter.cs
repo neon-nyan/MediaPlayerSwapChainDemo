@@ -1,6 +1,8 @@
-﻿using System;
-using Microsoft.UI.Composition;
+﻿using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Controls;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace WinUIPlayerBehindAcrylic;
 
@@ -12,5 +14,5 @@ internal interface IVideoFramePresenter : IDisposable
 
     void ToggleVideo(bool isEnable);
 
-    void Open(Uri uri, bool isLoop = true);
+    Task OpenAsync(Uri uri, bool isLoop = true, CancellationToken token = default);
 }

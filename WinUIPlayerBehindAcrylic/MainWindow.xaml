@@ -27,7 +27,7 @@
             <Grid MaxWidth="512"
                   MaxHeight="512"
                   HorizontalAlignment="Right"
-                  VerticalAlignment="Bottom"
+                  VerticalAlignment="Center"
                   BorderThickness=".5"
                   BorderBrush="#22FFFFFF"
                   CornerRadius="8"
@@ -42,7 +42,7 @@
             </Grid>
             <Grid MaxWidth="512"
                   MaxHeight="512"
-                  HorizontalAlignment="Left"
+                  HorizontalAlignment="Center"
                   VerticalAlignment="Top"
                   BorderThickness=".5"
                   BorderBrush="#22FFFFFF"

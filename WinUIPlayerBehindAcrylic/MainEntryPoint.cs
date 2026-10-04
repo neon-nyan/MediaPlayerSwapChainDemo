@@ -14,6 +14,7 @@ internal static class MainEntryPoint
     public static void Main(params string[] args)
     {
         Logger.UseConsoleLog(true);
+        Logger.LogWriteLine("Starting up WinUI...");
 
         Application.Start(_ =>
         {
