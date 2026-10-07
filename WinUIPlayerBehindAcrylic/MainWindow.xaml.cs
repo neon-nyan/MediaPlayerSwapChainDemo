@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Windows.Media.Playback;
 using Microsoft.UI.Xaml.Controls;
@@ -45,9 +46,10 @@ public sealed partial class MainWindow
         ExtendsContentIntoTitleBar = true;
     }
 
-    private async void Grid_OnLoaded(object sender, RoutedEventArgs e)
+    private async void Presenter_OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is not FrameworkElement { Tag: string searchPath } element ||
+        if (sender is not MediaFoundationPresenter presenter ||
+            presenter.Parent is not FrameworkElement { Tag: string searchPath } element ||
             string.IsNullOrEmpty(searchPath))
         {
             return;
@@ -55,11 +57,9 @@ public sealed partial class MainWindow
 
         bool isMuted = element.Resources.TryGetValue("IsMuted", out object isMutedObj) && isMutedObj is true;
 
-        // Initialize Grid as the video frame host.
-        IVideoFramePresenter presenter = new MediaFoundationPresenter();
-        presenter.Initialize(element);
-
         string[] samples = MergeSamples(searchPath);
+        if (samples.Length == 0)
+            return;
 
         for (int i = 0; i < samples.Length; i++)
         {
@@ -81,14 +81,17 @@ public sealed partial class MainWindow
         };
         ((IWinRTObject)mediaPlayer).NativeObject.TryAs(IID_IMediaPlayer5, out nint mediaPlayerAbi);
 
+        Lock playbackLock = new();
+        CancellationTokenSource playbackCancellation = new();
+        CancellationToken playbackToken = playbackCancellation.Token;
         FFmpegMediaSource? previousMediaSource = null;
-        element.Unloaded                += ElementOnUnloaded;
+        presenter.Unloaded              += ElementOnUnloaded;
         element.PointerEntered          += ElementOnPointerEntered;
         element.PointerExited           += ElementOnPointerExited;
         mediaPlayer.MediaEnded          += PlayNextLoop;
         mediaPlayer.VideoFrameAvailable += DrawMediaFrameToPresenter;
 
-        previousMediaSource = await PlayAsync(new Uri(samples[index]), mediaPlayer);
+        await PlaySampleAsync();
         return;
 
         static string[] MergeSamples(string searchPath)
@@ -201,38 +204,81 @@ public sealed partial class MainWindow
             sb.Begin();
         }
 
-        async void PlayNextLoop(MediaPlayer source, object args)
+        void PlayNextLoop(MediaPlayer source, object args)
         {
-            index++;
-            if (index > samples.Length - 1)
+            // Keep source changes and unload cleanup on the element's UI thread.
+            DispatcherQueue.TryEnqueue(async () =>
             {
-                index = 0;
-                Random.Shared.Shuffle(samples);
-            }
+                if (playbackToken.IsCancellationRequested)
+                    return;
 
-            previousMediaSource?.Dispose();
-            previousMediaSource = await PlayAsync(new Uri(samples[index]), source);
+                index++;
+                if (index > samples.Length - 1)
+                {
+                    index = 0;
+                    Random.Shared.Shuffle(samples);
+                }
+
+                previousMediaSource?.Dispose();
+                previousMediaSource = null;
+                await PlaySampleAsync();
+            });
+        }
+
+        async Task PlaySampleAsync()
+        {
+            try
+            {
+                FFmpegMediaSource source = await PlayAsync(new Uri(samples[index]), mediaPlayer, playbackToken);
+                if (playbackToken.IsCancellationRequested)
+                    source.Dispose();
+                else
+                    previousMediaSource = source;
+            }
+            catch (Exception) when (playbackToken.IsCancellationRequested)
+            {
+                // Unloading can interrupt an asynchronous source open.
+            }
         }
 
         unsafe void DrawMediaFrameToPresenter(MediaPlayer player, object args)
+        {
             // Perform draw to the presenter. Use CopyFrameToVideoSurface as the consumer
             // to copy the current frame to the presenter.
-            => presenter.DrawUnsafe(DrawConsumer,
-                                    (int)player.PlaybackSession.NaturalVideoWidth,
-                                    (int)player.PlaybackSession.NaturalVideoHeight);
+            using (playbackLock.EnterScope())
+            {
+                if (playbackToken.IsCancellationRequested)
+                    return;
+
+                presenter.DrawUnsafe(DrawConsumer,
+                                     (int)player.PlaybackSession.NaturalVideoWidth,
+                                     (int)player.PlaybackSession.NaturalVideoHeight);
+            }
+        }
 
         unsafe void DrawConsumer(nint surfaceAbi)
-            => ((delegate* unmanaged[MemberFunction]<nint, nint, int>)(*(*(void***)mediaPlayerAbi + 10)))(mediaPlayerAbi, surfaceAbi);
+            => Marshal.ThrowExceptionForHR(((delegate* unmanaged[MemberFunction]<nint, nint, int>)(*(*(void***)mediaPlayerAbi + 10)))(mediaPlayerAbi, surfaceAbi));
         
         void ElementOnUnloaded(object s, RoutedEventArgs args)
         {
-            presenter.Dispose();
+            playbackCancellation.Cancel();
+            presenter.Unloaded              -= ElementOnUnloaded;
+            element.PointerEntered          -= ElementOnPointerEntered;
+            element.PointerExited           -= ElementOnPointerExited;
+            mediaPlayer.MediaEnded          -= PlayNextLoop;
+            mediaPlayer.VideoFrameAvailable -= DrawMediaFrameToPresenter;
+            using (playbackLock.EnterScope())
+            {
+                if (mediaPlayerAbi != nint.Zero)
+                    Marshal.Release(Interlocked.Exchange(ref mediaPlayerAbi, nint.Zero));
+            }
             previousMediaSource?.Dispose();
             mediaPlayer.Dispose();
+            playbackCancellation.Dispose();
         }
     }
 
-    private static async Task<FFmpegMediaSource> PlayAsync(Uri uri, MediaPlayer mediaPlayer)
+    private static async Task<FFmpegMediaSource> PlayAsync(Uri uri, MediaPlayer mediaPlayer, CancellationToken cancellationToken)
     {
         MediaSourceConfig ffmpegConfig = new()
         {
@@ -255,8 +301,18 @@ public sealed partial class MainWindow
                 ? FFmpegMediaSource.CreateFromFileAsync(uri.LocalPath)
                 : FFmpegMediaSource.CreateFromUriAsync(uri.ToString(), ffmpegConfig));
 
-        await source.OpenWithMediaPlayerAsync(mediaPlayer);
-        mediaPlayer.Play();
-        return source;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await source.OpenWithMediaPlayerAsync(mediaPlayer);
+            cancellationToken.ThrowIfCancellationRequested();
+            mediaPlayer.Play();
+            return source;
+        }
+        catch
+        {
+            source.Dispose();
+            throw;
+        }
     }
 }
