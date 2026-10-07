@@ -1,14 +1,20 @@
 using FFmpegInteropX;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Windows.Media.Playback;
+using Microsoft.UI.Xaml.Controls;
 using WinRT;
 // ReSharper disable InconsistentNaming
+// ReSharper disable AccessToModifiedClosure
+// ReSharper disable AsyncVoidMethod
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -33,70 +39,169 @@ public sealed partial class MainWindow
         }
     }
 
-    private readonly IVideoFramePresenter _videoFramePresenter;
-    private readonly MediaPlayer          _mediaPlayer;
-    private readonly nint                 _mediaPlayerAbi;
-
-    private readonly unsafe delegate* unmanaged[MemberFunction]<nint, nint, int> _mediaPlayerCopyToSurfaceFunc;
-
-    private FFmpegMediaSource? _currentMediaSource;
-
-    private bool IsVideoEnabled
-    {
-        get;
-        set
-        {
-            field = value;
-            _videoFramePresenter.Toggle(value);
-            VideoHost.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
-        }
-    } = true;
-
     public unsafe MainWindow()
     {
-        _videoFramePresenter = new MediaFoundationPresenter();
-        _mediaPlayer = new MediaPlayer
-        {
-            IsLoopingEnabled          = false,
-            IsVideoFrameServerEnabled = true // Use FrameServer mode
-        };
-        ((IWinRTObject)_mediaPlayer).NativeObject.TryAs(IID_IMediaPlayer5, out _mediaPlayerAbi);
-        _mediaPlayerCopyToSurfaceFunc = (delegate* unmanaged[MemberFunction]<nint, nint, int>)(*(*(void***)_mediaPlayerAbi + 10));
-
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
-
-        Closed += (_, _) =>
-        {
-            _videoFramePresenter.Dispose();
-        };
     }
 
     private async void Grid_OnLoaded(object sender, RoutedEventArgs e)
     {
-        // Initialize Grid as the video frame host.
-        _videoFramePresenter.Initialize((Grid)sender);
+        if (sender is not FrameworkElement { Tag: string searchPath } element ||
+            string.IsNullOrEmpty(searchPath))
+        {
+            return;
+        }
 
-        string[] samples = Directory.GetFiles(Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? "", "Samples"),
-                                              "vidSample*.*",
-                                              SearchOption.TopDirectoryOnly);
+        bool isMuted = element.Resources.TryGetValue("IsMuted", out object isMutedObj) && isMutedObj is true;
+
+        // Initialize Grid as the video frame host.
+        IVideoFramePresenter presenter = new MediaFoundationPresenter();
+        presenter.Initialize(element);
+
+        string[] samples = MergeSamples(searchPath);
 
         for (int i = 0; i < samples.Length; i++)
         {
             samples[i] = Path.IsPathFullyQualified(samples[i]) ? samples[i] : Path.GetFullPath(samples[i]);
         }
 
-        int index = 0;
+        int    index          = 0;
+        double initialOpacity = element.Opacity;
+        int    initialZIndex  = Canvas.GetZIndex(element);
+
         Random.Shared.Shuffle(samples);
 
         // Subscribe to MediaEnded event so we can loop to the next sample.
-        _mediaPlayer.MediaEnded          += PlayNextLoop;
-        _mediaPlayer.VideoFrameAvailable += DrawMediaFrameToPresenter;
+        MediaPlayer mediaPlayer = new()
+        {
+            IsVideoFrameServerEnabled = true,
+            IsLoopingEnabled          = false,
+            IsMuted                   = isMuted
+        };
+        ((IWinRTObject)mediaPlayer).NativeObject.TryAs(IID_IMediaPlayer5, out nint mediaPlayerAbi);
 
-        _currentMediaSource = await PlayAsync(new Uri(samples[index]), _mediaPlayer);
+        FFmpegMediaSource? previousMediaSource = null;
+        element.Unloaded                += ElementOnUnloaded;
+        element.PointerEntered          += ElementOnPointerEntered;
+        element.PointerExited           += ElementOnPointerExited;
+        mediaPlayer.MediaEnded          += PlayNextLoop;
+        mediaPlayer.VideoFrameAvailable += DrawMediaFrameToPresenter;
+
+        previousMediaSource = await PlayAsync(new Uri(samples[index]), mediaPlayer);
         return;
 
-        async void PlayNextLoop(MediaPlayer? mediaPlayer, object args)
+        static string[] MergeSamples(string searchPath)
+        {
+            List<string> samples = [];
+            foreach (Range splits in searchPath.AsSpan().SplitAny(",;|"))
+            {
+                string thisSearchPath = searchPath[splits].Trim();
+                string searchPattern  = Path.GetFileName(thisSearchPath);
+                string dirPath        = Path.GetDirectoryName(thisSearchPath) ?? "";
+                samples.AddRange(Directory.GetFiles(dirPath, searchPattern, SearchOption.TopDirectoryOnly));
+            }
+
+            return [.. samples];
+        }
+
+        void ElementOnPointerEntered(object s, PointerRoutedEventArgs args)
+        {
+            mediaPlayer.IsMuted = false;
+            Canvas.SetZIndex(element, 1);
+
+            Storyboard sb = new();
+            DoubleAnimation opacityAnimation = new()
+            {
+                From     = initialOpacity,
+                To       = 1,
+                Duration = new Duration(TimeSpan.FromSeconds(0.10))
+            };
+
+            Storyboard.SetTarget(opacityAnimation, element);
+            Storyboard.SetTargetProperty(opacityAnimation, "Opacity");
+            sb.Children.Add(opacityAnimation);
+
+            CompositeTransform transform = (CompositeTransform)element.RenderTransform;
+            CubicEase cubicEaseOut = new()
+            {
+                EasingMode = EasingMode.EaseOut
+            };
+
+            DoubleAnimation scaleXAnim = new()
+            {
+                From           = 1,
+                To             = 1.08,
+                Duration       = new Duration(TimeSpan.FromSeconds(0.1)),
+                EasingFunction = cubicEaseOut
+            };
+            Storyboard.SetTarget(scaleXAnim, transform);
+            Storyboard.SetTargetProperty(scaleXAnim, "ScaleX");
+            sb.Children.Add(scaleXAnim);
+
+            DoubleAnimation scaleYAnim = new()
+            {
+                From           = 1,
+                To             = 1.08,
+                Duration       = new Duration(TimeSpan.FromSeconds(0.1)),
+                EasingFunction = cubicEaseOut
+            };
+            Storyboard.SetTarget(scaleYAnim, transform);
+            Storyboard.SetTargetProperty(scaleYAnim, "ScaleY");
+            sb.Children.Add(scaleYAnim);
+
+            sb.Begin();
+        }
+
+        void ElementOnPointerExited(object s, PointerRoutedEventArgs args)
+        {
+            mediaPlayer.IsMuted = true;
+            Canvas.SetZIndex(element, initialZIndex);
+
+            Storyboard sb = new();
+            DoubleAnimation opacityAnimation = new()
+            {
+                From     = 1,
+                To       = initialOpacity,
+                Duration = new Duration(TimeSpan.FromSeconds(0.10))
+            };
+
+            Storyboard.SetTarget(opacityAnimation, element);
+            Storyboard.SetTargetProperty(opacityAnimation, "Opacity");
+            sb.Children.Add(opacityAnimation);
+
+            CompositeTransform transform = (CompositeTransform)element.RenderTransform;
+            CubicEase cubicEaseOut = new()
+            {
+                EasingMode = EasingMode.EaseOut
+            };
+
+            DoubleAnimation scaleXAnim = new()
+            {
+                From           = 1.08,
+                To             = 1,
+                Duration       = new Duration(TimeSpan.FromSeconds(0.1)),
+                EasingFunction = cubicEaseOut
+            };
+            Storyboard.SetTarget(scaleXAnim, transform);
+            Storyboard.SetTargetProperty(scaleXAnim, "ScaleX");
+            sb.Children.Add(scaleXAnim);
+
+            DoubleAnimation scaleYAnim = new()
+            {
+                From           = 1.08,
+                To             = 1,
+                Duration       = new Duration(TimeSpan.FromSeconds(0.1)),
+                EasingFunction = cubicEaseOut
+            };
+            Storyboard.SetTarget(scaleYAnim, transform);
+            Storyboard.SetTargetProperty(scaleYAnim, "ScaleY");
+            sb.Children.Add(scaleYAnim);
+
+            sb.Begin();
+        }
+
+        async void PlayNextLoop(MediaPlayer source, object args)
         {
             index++;
             if (index > samples.Length - 1)
@@ -105,20 +210,27 @@ public sealed partial class MainWindow
                 Random.Shared.Shuffle(samples);
             }
 
-            _currentMediaSource?.Dispose();
-            _currentMediaSource = await PlayAsync(new Uri(samples[index]), _mediaPlayer);
+            previousMediaSource?.Dispose();
+            previousMediaSource = await PlayAsync(new Uri(samples[index]), source);
+        }
+
+        unsafe void DrawMediaFrameToPresenter(MediaPlayer player, object args)
+            // Perform draw to the presenter. Use CopyFrameToVideoSurface as the consumer
+            // to copy the current frame to the presenter.
+            => presenter.DrawUnsafe(DrawConsumer,
+                                    (int)player.PlaybackSession.NaturalVideoWidth,
+                                    (int)player.PlaybackSession.NaturalVideoHeight);
+
+        unsafe void DrawConsumer(nint surfaceAbi)
+            => ((delegate* unmanaged[MemberFunction]<nint, nint, int>)(*(*(void***)mediaPlayerAbi + 10)))(mediaPlayerAbi, surfaceAbi);
+        
+        void ElementOnUnloaded(object s, RoutedEventArgs args)
+        {
+            presenter.Dispose();
+            previousMediaSource?.Dispose();
+            mediaPlayer.Dispose();
         }
     }
-
-    private unsafe void DrawMediaFrameToPresenter(MediaPlayer sender, object args)
-        // Perform draw to the presenter. Use CopyFrameToVideoSurface as the consumer
-        // to copy the current frame to the presenter.
-        => _videoFramePresenter.DrawUnsafe(DrawConsumer,
-                                           (int)sender.PlaybackSession.NaturalVideoWidth,
-                                           (int)sender.PlaybackSession.NaturalVideoHeight);
-
-    private unsafe void DrawConsumer(nint surfaceAbi)
-        => _mediaPlayerCopyToSurfaceFunc(_mediaPlayerAbi, surfaceAbi);
 
     private static async Task<FFmpegMediaSource> PlayAsync(Uri uri, MediaPlayer mediaPlayer)
     {

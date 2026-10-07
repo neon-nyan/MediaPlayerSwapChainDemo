@@ -14,33 +14,41 @@
                           TintColor="#111111"
                           TintLuminosityOpacity="0.3"
                           TintOpacity="0.2"/>
+            <ThemeShadow x:Key="Shadow"/>
         </Grid.Resources>
         <Image Source="Samples/pixelframe-design_pokopia-font-logo.jpg"
                Stretch="UniformToFill"
                VerticalAlignment="Center"
                HorizontalAlignment="Center"/>
-        <Grid x:Name="VideoHost"
-              IsHitTestVisible="False"
-              Loaded="Grid_OnLoaded"
-              Margin="64"/>
-        <Grid>
-            <Grid MaxWidth="512"
-                  MaxHeight="512"
-                  HorizontalAlignment="Right"
-                  VerticalAlignment="Center"
-                  BorderThickness=".5"
-                  BorderBrush="#22FFFFFF"
-                  CornerRadius="8"
-                  Margin="16"
-                  Padding="16"
-                  Background="{ThemeResource GridAcrylicBrush}">
-                <TextBlock Text="Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aenean quis dui ligula."
-                           FontSize="32"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           TextWrapping="Wrap"/>
+        <Grid ColumnSpacing="32"
+              RowSpacing="32"
+              Margin="32">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition/>
+                <RowDefinition/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Column="0"
+                  Grid.Row="0"
+                  Tag="C:\Users\neon-nyan\Downloads\【崩壊：スターレイル】黄泉 キャラクターPV 「君の色」-fOvY5tG_qFk.webm;C:\Users\neon-nyan\Downloads\【崩壊：スターレイル】符玄 キャラクターPV 「遺漏なき法眼」 [jhLeZi33cSY].webm;C:\Users\neon-nyan\Downloads\【崩壊：スターレイル】姫子 キャラクターPV 「星を追う者」 [gM2gcVQKxEs].webm;C:\Users\neon-nyan\Downloads\【崩壊：スターレイル】姫子 キャラクターPV 「星を追う者」 [gM2gcVQKxEs].webm;C:\Users\neon-nyan\Downloads\【崩壊：スターレイル】銀狼LV.999 キャラクターPV 「私だけカンストな件」 [LkxwwIyXJxE].webm"
+                  Background="{StaticResource GridAcrylicBrush}"
+                  Loaded="Grid_OnLoaded"
+                  Opacity=".5"
+                  RenderTransformOrigin=".5, .5">
+                <Grid.RenderTransform>
+                    <CompositeTransform ScaleX="1"
+                                        ScaleY="1" />
+                </Grid.RenderTransform>
+                <Grid.Resources>
+                    <x:Boolean x:Key="IsMuted">true</x:Boolean>
+                </Grid.Resources>
             </Grid>
-            <Grid MaxWidth="512"
+            <Grid Grid.Column="0"
+                  Grid.Row="0"
+                  MaxWidth="512"
                   MaxHeight="512"
                   HorizontalAlignment="Center"
                   VerticalAlignment="Top"
@@ -49,15 +57,140 @@
                   CornerRadius="8"
                   Margin="16"
                   Padding="16"
+                  IsHitTestVisible="False"
                   Background="{ThemeResource GridAcrylicBrush}">
-                <StackPanel>
-                    <CheckBox IsChecked="{x:Bind IsVideoEnabled, Mode=TwoWay}" Content="Is Enabled?"/>
-                    <TextBlock Text="Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aenean quis dui ligula."
-                               FontSize="32"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
-                               TextWrapping="Wrap"/>
-                </StackPanel>
+                <TextBlock Text="Video 1 Feed"
+                           FontSize="32"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </Grid>
+            <Grid Grid.Column="1"
+                  Grid.Row="0"
+                  Tag="Samples/vidSample*.*;C:\Users\neon-nyan\Downloads\「ハッピー・ンナンナデイ！」｜ゼンレスゾーンゼロ [re-GpMXLxO8].webm;C:\Users\neon-nyan\Downloads\千夏 エキシビション「夢を描くサンプル」｜ゼンレスゾーンゼロ [FJ0HD6RC6PY].webm;C:\Users\neon-nyan\Downloads\南宮羽EP「心、妄想色に」 ｜ ゼンレスゾーンゼロ [1hHEmZRRJrI].webm;C:\Users\neon-nyan\Downloads\リュシアEP「DAMIDAMI」 ｜ ゼンレスゾーンゼロ [Tb21nggwBo4].webm;C:\Users\neon-nyan\Downloads\リュシアEP「DAMIDAMI」 ｜ ゼンレスゾーンゼロ [Tb21nggwBo4].webm;C:\Users\neon-nyan\Downloads\【ゼンゼロ】「ReDreaming Angel」⧸妄想エンジェル（CV：森嶋優花・前田佳織里・高尾奏音） [8dQrHdBAnhI].webm"
+                  Background="{StaticResource GridAcrylicBrush}"
+                  Loaded="Grid_OnLoaded"
+                  Opacity=".5"
+                  RenderTransformOrigin=".5, .5">
+                <Grid.RenderTransform>
+                    <CompositeTransform ScaleX="1"
+                                        ScaleY="1" />
+                </Grid.RenderTransform>
+                <Grid.Resources>
+                    <x:Boolean x:Key="IsMuted">true</x:Boolean>
+                </Grid.Resources>
+            </Grid>
+            <Grid Grid.Column="1"
+                  Grid.Row="0"
+                  MaxWidth="512"
+                  MaxHeight="512"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Top"
+                  BorderThickness=".5"
+                  BorderBrush="#22FFFFFF"
+                  CornerRadius="8"
+                  Margin="16"
+                  Padding="16"
+                  IsHitTestVisible="False"
+                  Background="{ThemeResource GridAcrylicBrush}">
+                <TextBlock Text="Video 2 Feed"
+                           FontSize="32"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </Grid>
+            <Grid Grid.Column="0"
+                  Grid.Row="1"
+                  Tag="C:\Users\neon-nyan\Downloads\【原神】ストーリームービー「赤き花の咲く時」 [hDZPRTAS7Rs].webm;C:\Users\neon-nyan\Downloads\Genshin Impact Special EP - 'The Rime of the Ancient Bargeman' #GenshinImpact #LanYan #EP-5DnxpbOsFVo.webm;C:\Users\neon-nyan\Downloads\Genshin Impact EP - A Scenery of Skylight and Serenity-pIDHjBGpaaw.webm;C:\Users\neon-nyan\Videos\2025-09-01 22-01-40.mkv;C:\Users\neon-nyan\Downloads\【原神】キャラクタートレーラー コロンビーナ（CV：Lynn）「向かうべき場所」-9AVYsSZ1huA.webm"
+                  Background="{StaticResource GridAcrylicBrush}"
+                  Loaded="Grid_OnLoaded"
+                  Opacity=".5"
+                  RenderTransformOrigin=".5, .5">
+                <Grid.RenderTransform>
+                    <CompositeTransform ScaleX="1"
+                                        ScaleY="1" />
+                </Grid.RenderTransform>
+                <Grid.Resources>
+                    <x:Boolean x:Key="IsMuted">true</x:Boolean>
+                </Grid.Resources>
+            </Grid>
+            <Grid Grid.Column="0"
+                  Grid.Row="1"
+                  MaxWidth="512"
+                  MaxHeight="512"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Bottom"
+                  BorderThickness=".5"
+                  BorderBrush="#22FFFFFF"
+                  CornerRadius="8"
+                  Margin="16"
+                  Padding="16"
+                  IsHitTestVisible="False"
+                  Background="{ThemeResource GridAcrylicBrush}">
+                <TextBlock Text="Video 3 Feed"
+                           FontSize="32"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </Grid>
+            <Grid Grid.Column="1"
+                  Grid.Row="1"
+                  Tag="C:\Users\neon-nyan\Downloads\【崩壊：スターレイル】火花 キャラクターPV 「愚か者が語る夢」 [AdUoc-nSB94].webm;C:\Users\neon-nyan\Downloads\【崩壊：スターレイル】ロビン・夏空の歌 キャラクターPV 「風を追いかけて」 [882FHoKwZVk].webm"
+                  Background="{StaticResource GridAcrylicBrush}"
+                  Loaded="Grid_OnLoaded"
+                  Opacity=".5"
+                  RenderTransformOrigin=".5, .5">
+                <Grid.RenderTransform>
+                    <CompositeTransform ScaleX="1"
+                                        ScaleY="1" />
+                </Grid.RenderTransform>
+                <Grid.Resources>
+                    <x:Boolean x:Key="IsMuted">true</x:Boolean>
+                </Grid.Resources>
+            </Grid>
+            <Grid Grid.Column="1"
+                  Grid.Row="1"
+                  MaxWidth="512"
+                  MaxHeight="512"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Bottom"
+                  BorderThickness=".5"
+                  BorderBrush="#22FFFFFF"
+                  CornerRadius="8"
+                  Margin="16"
+                  Padding="16"
+                  IsHitTestVisible="False"
+                  Background="{ThemeResource GridAcrylicBrush}">
+                <TextBlock Text="Video 4 Feed"
+                           FontSize="32"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </Grid>
+            <Grid Grid.Column="0"
+                  Grid.Row="0"
+                  Grid.ColumnSpan="2"
+                  Grid.RowSpan="2"
+                  MaxWidth="512"
+                  MaxHeight="512"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Center"
+                  BorderThickness=".5"
+                  BorderBrush="#22FFFFFF"
+                  CornerRadius="8"
+                  Margin="16"
+                  Padding="16"
+                  IsHitTestVisible="False"
+                  Background="{ThemeResource GridAcrylicBrush}"
+                  Shadow="{StaticResource Shadow}"
+                  Translation="0,0,16"
+                  Canvas.ZIndex="9">
+                <TextBlock Text="Grid in the middle with Shadows"
+                           FontSize="48"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           TextAlignment="Center"/>
             </Grid>
         </Grid>
     </Grid>
