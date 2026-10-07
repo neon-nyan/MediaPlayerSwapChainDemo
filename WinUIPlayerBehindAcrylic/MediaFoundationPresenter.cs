@@ -29,7 +29,10 @@ namespace WinUIPlayerBehindAcrylic;
 
 public sealed class MediaFoundationPresenter : IVideoFramePresenter
 {
-    private static readonly Guid IID_IDXGISurface = typeof(IDXGISurface).GUID;
+    private static readonly Guid IID_IDXGISurface                      = typeof(IDXGISurface).GUID;
+    private static readonly Guid IID_ID3D11Texture2D                   = typeof(ID3D11Texture2D).GUID;
+    private static readonly Guid IID_IDirect3DSurface                  = typeof(IDirect3DSurface).GUID;
+    private static readonly Guid IID_ICompositionDrawingSurfaceInterop = typeof(ICompositionDrawingSurfaceInterop).GUID;
 
     private int RenderWidth;
     private int RenderHeight;
@@ -165,7 +168,7 @@ public sealed class MediaFoundationPresenter : IVideoFramePresenter
             }
 
             // Query borrowed reference from drawing surface interop (+1 ref).
-            int hr = Marshal.QueryInterface(surfaceP, typeof(ICompositionDrawingSurfaceInterop).GUID, out _drawingSurfaceInteropAbi);
+            int hr = Marshal.QueryInterface(surfaceP, in IID_ICompositionDrawingSurfaceInterop, out _drawingSurfaceInteropAbi);
             Marshal.ThrowExceptionForHR(hr);
             _videoBrush!.Surface = _compositionSurface;
         }
@@ -311,7 +314,7 @@ public sealed class MediaFoundationPresenter : IVideoFramePresenter
 
             surfaceConsumer(_frameSurface);
             int hr = _drawingSurfaceInterop.BeginDraw(nint.Zero,
-                                                      typeof(IDXGISurface).GUID,
+                                                      in IID_IDXGISurface,
                                                       out nint updateP,
                                                       out POINTL offset);
             Marshal.ThrowExceptionForHR(hr);
@@ -319,7 +322,7 @@ public sealed class MediaFoundationPresenter : IVideoFramePresenter
             nint updateTextureP = nint.Zero;
             try
             {
-                hr = Marshal.QueryInterface(updateP, typeof(ID3D11Texture2D).GUID, out updateTextureP);
+                hr = Marshal.QueryInterface(updateP, in IID_ID3D11Texture2D, out updateTextureP);
                 Marshal.ThrowExceptionForHR(hr);
 
                 _d3dContext!.CopySubresourceRegion(updateTextureP,
@@ -369,7 +372,7 @@ public sealed class MediaFoundationPresenter : IVideoFramePresenter
             nint updateTextureP = nint.Zero;
             try
             {
-                Marshal.QueryInterface(updateP, typeof(ID3D11Texture2D).GUID, out updateTextureP);
+                Marshal.QueryInterface(updateP, in IID_ID3D11Texture2D, out updateTextureP);
                 ((delegate* unmanaged[MemberFunction]<nint, nint, uint, uint, uint, uint, nint, uint, nint, void>)(*(*(void***)_d3dContextAbi + 46)))
                     (_d3dContextAbi, updateTextureP, 0, (uint)offset.x, (uint)offset.y, 0, _frameTexture, 0, nint.Zero);
                 ((delegate* unmanaged[MemberFunction]<nint, void>)(*(*(void***)_d3dContextAbi + 111)))
@@ -433,17 +436,17 @@ public sealed class MediaFoundationPresenter : IVideoFramePresenter
         {
             _d3dDevice!.CreateTexture2D(in desc, nint.Zero, out textureP);
 
-            int hr = Marshal.QueryInterface(textureP, typeof(IDXGISurface).GUID, out dxgiSurfaceP);
+            int hr = Marshal.QueryInterface(textureP, in IID_IDXGISurface, out dxgiSurfaceP);
             Marshal.ThrowExceptionForHR(hr);
 
             hr = PInvoke.CreateDirect3D11SurfaceFromDXGISurface(dxgiSurfaceP, out graphicsSurfaceP);
             Marshal.ThrowExceptionForHR(hr);
 
-            hr = Marshal.QueryInterface(textureP, typeof(ID3D11Texture2D).GUID, out _frameTexture);
+            hr = Marshal.QueryInterface(textureP, in IID_ID3D11Texture2D, out _frameTexture);
             Marshal.ThrowExceptionForHR(hr);
 
             _frameSurface = MarshalInterface<IDirect3DSurface>.FromAbi(graphicsSurfaceP);
-            Marshal.QueryInterface(graphicsSurfaceP, typeof(IDirect3DSurface).GUID, out _frameSurfaceAbi);
+            Marshal.QueryInterface(graphicsSurfaceP, in IID_IDirect3DSurface, out _frameSurfaceAbi);
         }
         catch
         {
