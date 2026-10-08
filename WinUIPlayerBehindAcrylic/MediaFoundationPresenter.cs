@@ -20,9 +20,9 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using System.Threading;
-using System.Threading.Tasks;
 using Windows.Foundation;
 using Windows.Graphics.DirectX.Direct3D11;
+using Hi3Helper.Win32.Native.Enums.D2D;
 using WinRT;
 using Rect = Windows.Foundation.Rect;
 
@@ -32,7 +32,8 @@ using Rect = Windows.Foundation.Rect;
 namespace WinUIPlayerBehindAcrylic;
 
 /// <summary>
-/// A XAML element that presents video frames through its own composition surface.
+/// A XAML element that presents SDR frames through a drawing surface and FP16 HDR
+/// frames through a linear scRGB composition swap chain.
 /// Owns GPU resources only while loaded, visible, and intersecting its effective viewport.
 /// </summary>
 public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoFramePresenter
@@ -41,11 +42,19 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
     private static readonly Guid IID_ID3D11Texture2D                   = typeof(ID3D11Texture2D).GUID;
     private static readonly Guid IID_IDirect3DSurface                  = typeof(IDirect3DSurface).GUID;
     private static readonly Guid IID_ICompositionDrawingSurfaceInterop = typeof(ICompositionDrawingSurfaceInterop).GUID;
+    private static readonly Guid IID_IDXGIFactory2                     = typeof(IDXGIFactory2).GUID;
 
     private int RenderWidth;
     private int RenderHeight;
 
     private readonly Lock _renderLock = new();
+
+    // Frame callbacks must not wait for the UI thread while holding _renderLock.
+    // Keep the dependency properties' values here, protected by that same lock.
+    private DirectXPixelFormat _pixelFormat = DirectXPixelFormat.B8G8R8A8UIntNormalized;
+    private DirectXAlphaMode   _alphaMode   = DirectXAlphaMode.Premultiplied;
+    private CompositionStretch _stretch     = CompositionStretch.UniformToFill;
+    private Vector2            _layoutSize;
 
     private readonly DispatcherQueue _dispatcherQueue;
 
@@ -56,6 +65,8 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
     private CompositionGraphicsDevice?         _compositionGraphicsDevice;
     private ICompositionDrawingSurfaceInterop? _drawingSurfaceInterop;
     private nint                               _drawingSurfaceInteropAbi;
+    private IDXGISwapChain3?                   _swapChain;
+    private ICompositionSurface?               _swapChainSurface;
 
     private ID3D11Device?        _d3dDevice;
     private ID3D11DeviceContext? _d3dContext;
@@ -89,35 +100,56 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
      typeof(MediaFoundationPresenter),
      new PropertyMetadata(DirectXAlphaMode.Premultiplied, OnPixelFormatOrAlphaModeChanged));
 
+    /// <summary>
+    /// The Scale of the video frame to be displayed. Defaults to: <see cref="CompositionStretch.UniformToFill"/>
+    /// </summary>
     public CompositionStretch Stretch
     {
         get => (CompositionStretch)GetValue(StretchProperty);
         set => SetValue(StretchProperty, value);
     }
 
+    /// <summary>
+    /// Format shared by the video frame texture and its presentation buffers.
+    /// Use <see cref="DirectXPixelFormat.R16G16B16A16Float"/> for sources that supply HDR frames as linear scRGB.
+    /// FP16 uses a linear scRGB swap chain to avoid flattening HDR into an SDR drawing surface.
+    /// Defaults to: <see cref="DirectXPixelFormat.B8G8R8A8UIntNormalized"/>
+    /// </summary>
     public DirectXPixelFormat PixelFormat
     {
         get => (DirectXPixelFormat)GetValue(PixelFormatProperty);
         set => SetValue(PixelFormatProperty, value);
     }
 
+    /// <summary>
+    /// Alpha mode used by the video frame texture and its presentation buffers.
+    /// To ignore the Alpha channel, use <see cref="DirectXAlphaMode.Ignore"/>.
+    /// Defaults to: <see cref="DirectXAlphaMode.Premultiplied"/>
+    /// </summary>
     public DirectXAlphaMode AlphaMode
     {
         get => (DirectXAlphaMode)GetValue(AlphaModeProperty);
         set => SetValue(AlphaModeProperty, value);
     }
 
+    /// <summary>
+    /// An instance to the Logger for trace or debug purposes.
+    /// </summary>
     public ILogger? Logger { get; set; }
 
-    /// <summary>True while this element intersects its effective viewport and owns rendering resources.</summary>
+    /// <summary>
+    /// <see langword="true"/> while this element intersects its effective viewport and owns rendering resources.
+    /// </summary>
     public bool IsPresentationActive { get; private set; }
 
     /// <summary>
     /// Raised on the UI thread when viewport visibility changes resource ownership.
-    /// The playback owner should close its player and decoder when inactive, and reopen them when active.
     /// </summary>
     public event EventHandler? PresentationStateChanged;
 
+    /// <summary>
+    /// Creates a new instance of <see cref="MediaFoundationPresenter"/>.
+    /// </summary>
     public MediaFoundationPresenter()
     {
         _dispatcherQueue         =  DispatcherQueue;
@@ -128,36 +160,46 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         _visibilityCallbackToken =  RegisterPropertyChangedCallback(VisibilityProperty, OnVisibilityChanged);
     }
 
+    private void OnLoaded(object sender, RoutedEventArgs args)
+    {
+        _isLoaded = true;
+        using (_renderLock.EnterScope())
+            _layoutSize = new Vector2((float)ActualWidth, (float)ActualHeight);
+        // Wait for viewport information before allocating, including on the first load offscreen.
+        UpdatePresentationState();
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs args)
+    {
+        _isLoaded = false;
+        // Keep the last viewport: WinUI only reports changes, so reloading at the same
+        // bounds may not produce another notification. _isLoaded still gates allocation.
+        UpdatePresentationState();
+    }
+
     private static void OnStretchChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         MediaFoundationPresenter presenter = (MediaFoundationPresenter)sender;
-        if (presenter._videoBrush != null)
-            presenter._videoBrush.Stretch = (CompositionStretch)args.NewValue;
+        using (presenter._renderLock.EnterScope())
+        {
+            presenter._stretch = (CompositionStretch)args.NewValue;
+            presenter.UpdateSurfaceBrushTransform();
+        }
     }
 
     private static void OnPixelFormatOrAlphaModeChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         MediaFoundationPresenter presenter = (MediaFoundationPresenter)sender;
-        if (!presenter.IsLoaded)
-            return;
+        using (presenter._renderLock.EnterScope())
+        {
+            presenter._pixelFormat = presenter.PixelFormat;
+            presenter._alphaMode   = presenter.AlphaMode;
 
-        presenter.ReleaseFrameSurface();
-        presenter.RecreateDeviceResources();
-        presenter.CreateFrameSurface();
-    }
-
-    // Fill the offered layout slot. In an unconstrained panel the caller can set Width/Height.
-    protected override Size MeasureOverride(Size availableSize) => new(
-        double.IsPositiveInfinity(availableSize.Width) ? 0 : availableSize.Width,
-        double.IsPositiveInfinity(availableSize.Height) ? 0 : availableSize.Height);
-
-    protected override Size ArrangeOverride(Size finalSize) => finalSize;
-
-    private void OnLoaded(object sender, RoutedEventArgs args)
-    {
-        _isLoaded = true;
-        // Wait for viewport information before allocating, including on the first load offscreen.
-        UpdatePresentationState();
+            // Defer allocation until viewport reentry if currently inactive. The next
+            // frame supplies the dimensions; never allocate a zero-sized frame texture.
+            if (presenter is { _disposed: false, IsPresentationActive: true })
+                presenter.RecreateDeviceResources();
+        }
     }
 
     private void OnEffectiveViewportChanged(FrameworkElement sender, EffectiveViewportChangedEventArgs args)
@@ -167,14 +209,66 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         UpdatePresentationState();
     }
 
-    private void OnSizeChanged(object sender, SizeChangedEventArgs args) => UpdatePresentationState();
+    private void OnSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        using (_renderLock.EnterScope())
+        {
+            _layoutSize = new Vector2((float)args.NewSize.Width, (float)args.NewSize.Height);
+            UpdateSurfaceBrushTransform();
+        }
+        UpdatePresentationState();
+    }
 
     private void OnVisibilityChanged(DependencyObject sender, DependencyProperty property) => UpdatePresentationState();
+
+    // Fill the offered layout slot. In an unconstrained panel the caller can set Width/Height.
+    protected override Size MeasureOverride(Size availableSize) => new(
+        double.IsPositiveInfinity(availableSize.Width) ? 0 : availableSize.Width,
+        double.IsPositiveInfinity(availableSize.Height) ? 0 : availableSize.Height);
+
+    protected override Size ArrangeOverride(Size finalSize) => finalSize;
+
+    private unsafe void UpdateSurfaceBrushTransform()
+    {
+        if (_videoBrush is null)
+            return;
+
+        if (_pixelFormat != DirectXPixelFormat.R16G16B16A16Float)
+        {
+            _videoBrush.Stretch         = _stretch;
+            _videoBrush.TransformMatrix = Matrix3x2.Identity;
+            return;
+        }
+
+        // Swap-chain surfaces do not participate in automatic surface-brush stretching.
+        // Apply sizing on the swap chain itself, before the composition surface clips it.
+        _videoBrush.Stretch         = CompositionStretch.None;
+        _videoBrush.TransformMatrix = Matrix3x2.Identity;
+        if (RenderWidth <= 0 || RenderHeight <= 0 || _swapChain == null ||
+            _layoutSize.X <= 0 || _layoutSize.Y <= 0)
+            return;
+
+        Vector2 frameSize = new(RenderWidth, RenderHeight);
+        Vector2 scale     = _layoutSize / frameSize;
+        scale = _stretch switch
+        {
+            CompositionStretch.None          => Vector2.One,
+            CompositionStretch.Uniform       => new Vector2(Math.Min(scale.X, scale.Y)),
+            CompositionStretch.UniformToFill => new Vector2(Math.Max(scale.X, scale.Y)),
+            _                                => scale
+        };
+
+        Vector2   offset    = (_layoutSize - frameSize * scale) * 0.5f;
+        Matrix3x2 transform = Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(offset);
+        // IDXGISwapChain2::SetMatrixTransform; Matrix3x2 matches DXGI_MATRIX_3X2_F.
+        _swapChain.SetMatrixTransform(in transform);
+    }
 
     private void UpdatePresentationState()
     {
         Rect visibleBounds = _effectiveViewport;
         visibleBounds.Intersect(new Rect(0, 0, ActualWidth, ActualHeight));
+
         bool active = !_disposed && _isLoaded && _hasViewport && Visibility == Visibility.Visible &&
                       visibleBounds is { IsEmpty: false, Width: > 0, Height: > 0 };
 
@@ -227,14 +321,6 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         }
     }
 
-    private void OnUnloaded(object sender, RoutedEventArgs args)
-    {
-        _isLoaded = false;
-        // Keep the last viewport: WinUI only reports changes, so reloading at the same
-        // bounds may not produce another notification. _isLoaded still gates allocation.
-        UpdatePresentationState();
-    }
-
     private void CalculateFrameSize(int requestedWidth, int requestedHeight)
     {
         if (requestedWidth <= 0 || requestedHeight <= 0)
@@ -284,35 +370,10 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
             _d3dDevice = CreateD3DDeviceFromSharedCanvasDevice(Logger) ??
                          CreateD3DDevice(out _d3dContext, Logger);
 
-            Exception? ex;
             if (_d3dContext == null)
-            {
-                nint deviceAbi = (nint)ComInterfaceMarshaller<ID3D11Device>.ConvertToUnmanaged(_d3dDevice);
-                try
-                {
-                    // ID3D11Device::GetImmediateContext (slot 40). Own a unique wrapper so
-                    // its references can be released without waiting for a managed GC.
-                    ((delegate* unmanaged[MemberFunction]<nint, out nint, void>)(*(*(void***)deviceAbi + 40)))
-                        (deviceAbi, out _d3dContextAbi);
-                    if (!ComMarshal<ID3D11DeviceContext>
-                            .TryCreateComObjectFromReference(_d3dContextAbi,
-                                                             out _d3dContext,
-                                                             out ex,
-                                                             false,
-                                                             true))
-                    {
-                        throw ex;
-                    }
-                }
-                finally
-                {
-                    Marshal.Release(deviceAbi);
-                }
-            }
-            else
-            {
-                _d3dContextAbi = (nint)ComInterfaceMarshaller<ID3D11DeviceContext>.ConvertToUnmanaged(_d3dContext);
-            }
+                _d3dDevice.GetImmediateContext(out _d3dContext);
+
+            _d3dContextAbi = (nint)ComInterfaceMarshaller<ID3D11DeviceContext>.ConvertToUnmanaged(_d3dContext);
 
             // MediaPlayer and the compositor also use this immediate context.
             if (ComMarshal<ID3D11DeviceContext>.TryCastComObjectAs(_d3dContext,
@@ -326,23 +387,30 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
                 }
                 finally
                 {
-                    ReleaseOwnedComObject(d3d11Mt);
+                    ComMarshal.FinalRelease(d3d11Mt);
                 }
             }
 
+            if (_pixelFormat == DirectXPixelFormat.R16G16B16A16Float)
+            {
+                // Create the swap chain with the first frame's actual dimensions.
+                return;
+            }
+
             _compositionGraphicsDevice = CreateCompositionGraphicsDevice(_compositor!, _d3dDevice, Logger);
-            _compositionSurface = _compositionGraphicsDevice.CreateDrawingSurface(
-                new Size(0, 0),
-                GetValue<DirectXPixelFormat>(PixelFormatProperty),
-                GetValue<DirectXAlphaMode>(AlphaModeProperty));
+            _compositionSurface = _compositionGraphicsDevice
+                .CreateDrawingSurface(new Size(0, 0),
+                                      _pixelFormat,
+                                      _alphaMode);
 
             // This reference is borrowed from the projected surface.
             nint surfaceP = ((IWinRTObject)_compositionSurface).NativeObject.ThisPtr;
             if (!ComMarshal<ICompositionDrawingSurfaceInterop>
                     .TryCreateComObjectFromReference(surfaceP,
                                                      out _drawingSurfaceInterop,
-                                                     out ex,
-                                                     releaseReference: false, useUnique: true))
+                                                     out Exception? ex,
+                                                     releaseReference: false,
+                                                     useUnique: true))
             {
                 throw ex;
             }
@@ -390,7 +458,7 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         }
         finally
         {
-            ReleaseOwnedComObject(access);
+            ComMarshal.FinalRelease(access);
         }
     }
 
@@ -420,18 +488,28 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         {
             int hr = PInvoke.D3D11CreateDevice(nint.Zero,
                                                D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE,
-                                               0, flags, levels, levels.Length,
+                                               0,
+                                               flags,
+                                               levels,
+                                               levels.Length,
                                                D3D11_SDK_VERSION,
-                                               out deviceP, ref selectedFeatureLevel, out contextP);
+                                               out deviceP,
+                                               ref selectedFeatureLevel,
+                                               out contextP);
 #if DEBUG
             if (hr == unchecked((int)0x887A002D)) // Debug layer is not installed.
             {
                 flags &= ~D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_DEBUG;
                 hr = PInvoke.D3D11CreateDevice(nint.Zero,
                                                D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE,
-                                               0, flags, levels, levels.Length,
+                                               0,
+                                               flags,
+                                               levels,
+                                               levels.Length,
                                                D3D11_SDK_VERSION,
-                                               out deviceP, ref selectedFeatureLevel, out contextP);
+                                               out deviceP,
+                                               ref selectedFeatureLevel,
+                                               out contextP);
             }
 #endif
             if (hr < 0)
@@ -439,9 +517,14 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
                 // Optional WARP fallback.
                 hr = PInvoke.D3D11CreateDevice(nint.Zero,
                                                D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_WARP,
-                                               0, flags, levels, levels.Length,
+                                               0,
+                                               flags,
+                                               levels,
+                                               levels.Length,
                                                D3D11_SDK_VERSION,
-                                               out deviceP, ref selectedFeatureLevel, out contextP);
+                                               out deviceP,
+                                               ref selectedFeatureLevel,
+                                               out contextP);
             }
             Marshal.ThrowExceptionForHR(hr);
 
@@ -492,7 +575,7 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         try
         {
             d3dDeviceP = (nint)ComInterfaceMarshaller<ID3D11Device>.ConvertToUnmanaged(device);
-            Marshal.ThrowExceptionForHR(compositorInterop.CreateGraphicsDevice(d3dDeviceP, out graphicsDeviceP));
+            compositorInterop.CreateGraphicsDevice(d3dDeviceP, out graphicsDeviceP);
 
             logger?.LogDebug("D3D11 Graphics Created from the Compositor!");
             return MarshalInterface<CompositionGraphicsDevice>.FromAbi(graphicsDeviceP);
@@ -501,7 +584,7 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         {
             if (graphicsDeviceP != nint.Zero) Marshal.Release(graphicsDeviceP);
             if (d3dDeviceP != nint.Zero) Marshal.Release(d3dDeviceP);
-            ReleaseOwnedComObject(compositorInterop);
+            ComMarshal.FinalRelease(compositorInterop);
         }
     }
 
@@ -512,7 +595,7 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         using Lock.Scope renderScope = _renderLock.EnterScope();
         try
         {
-            if (_disposed || _recreating || _drawingSurfaceInterop is null ||
+            if (_disposed || _recreating || _d3dDevice is null ||
                 canvasWidth <= 0 || canvasHeight <= 0)
                 return;
 
@@ -521,7 +604,13 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
                 return;
 
             surfaceConsumer(_frameSurface);
-            int hr = _drawingSurfaceInterop.BeginDraw(nint.Zero,
+            if (_swapChain != null)
+            {
+                PresentHdrFrame();
+                return;
+            }
+
+            int hr = _drawingSurfaceInterop!.BeginDraw(nint.Zero,
                                                       in IID_IDXGISurface,
                                                       out nint updateP,
                                                       out POINTL offset);
@@ -566,16 +655,20 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         using Lock.Scope renderScope = _renderLock.EnterScope();
         try
         {
-            if (_disposed || _recreating || _drawingSurfaceInteropAbi == nint.Zero ||
+            if (_disposed || _recreating || _d3dDevice is null ||
                 canvasWidth <= 0 || canvasHeight <= 0)
                 return;
 
             CalculateFrameSize(canvasWidth, canvasHeight);
-            if (_frameSurfaceAbi == nint.Zero ||
-                _drawingSurfaceInteropAbi == nint.Zero)
+            if (_frameSurfaceAbi == nint.Zero)
                 return;
 
             surfaceConsumerUnsafe(_frameSurfaceAbi);
+            if (_swapChain != null)
+            {
+                PresentHdrFrame();
+                return;
+            }
             int hr = ((delegate* unmanaged[MemberFunction]<nint, nint, ref readonly Guid, out nint, out POINTL, int>)(*(*(void***)_drawingSurfaceInteropAbi + 3)))
                 (_drawingSurfaceInteropAbi, nint.Zero, in IID_IDXGISurface, out nint updateP, out POINTL offset);
             Marshal.ThrowExceptionForHR(hr);
@@ -637,9 +730,115 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
             _recreating = false;
     }
 
+    private unsafe void CreateHdrSwapChain(int width, int height)
+    {
+        // Linear scRGB (BT.709 primaries), not PQ: MediaPlayer has already converted
+        // the source transfer function when copying into the FP16 frame texture.
+        const DXGI_COLOR_SPACE_TYPE scRgb = DXGI_COLOR_SPACE_TYPE.DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+
+        // An FP16 drawing surface can be flattened into WinUI's SDR composition target.
+        // A flip-model swap chain carries its own scRGB color space through presentation.
+        IDXGIFactory2?               factory    = null;
+        IDXGISwapChain1?             swapChain1 = null;
+        ICompositorSwapChainInterop? interop    = null;
+        nint                         surfaceAbi = 0;
+
+        try
+        {
+            Marshal.ThrowExceptionForHR(PInvoke.CreateDXGIFactory2(0, in IID_IDXGIFactory2, out factory));
+            DXGI_SWAP_CHAIN_DESC1 desc = new()
+            {
+                Width       = (uint)width,
+                Height      = (uint)height,
+                Format      = DXGI_FORMAT.DXGI_FORMAT_R16G16B16A16_FLOAT,
+                SampleDesc  = new DXGI_SAMPLE_DESC { Count = 1 },
+                BufferUsage = DXGI_USAGE.DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                BufferCount = 2,
+                Scaling     = DXGI_SCALING.DXGI_SCALING_STRETCH,
+                SwapEffect  = DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                AlphaMode   = (DXGI_ALPHA_MODE)_alphaMode
+            };
+
+            factory!.CreateSwapChainForComposition(_d3dDevice!, in desc, null, out swapChain1);
+            if (!ComMarshal<IDXGISwapChain1>.TryCastComObjectAs(swapChain1,
+                                                                out _swapChain,
+                                                                out Exception? ex,
+                                                                useUnique: true))
+            {
+                throw ex;
+            }
+
+            _swapChain.CheckColorSpaceSupport(scRgb, out DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG support);
+            if (!support.HasFlag(DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG.PRESENT))
+                throw new NotSupportedException("The graphics device cannot present a linear scRGB swap chain.");
+
+            _swapChain.SetColorSpace1(scRgb);
+            nint compositor = ((IWinRTObject)_compositor!).NativeObject.ThisPtr;
+            if (!ComMarshal<ICompositorSwapChainInterop>
+                    .TryCreateComObjectFromReference(compositor,
+                                                     out interop,
+                                                     out ex,
+                                                     releaseReference: false,
+                                                     useUnique: true))
+            {
+                throw ex;
+            }
+
+            interop.CreateCompositionSurfaceForSwapChain(_swapChain, out surfaceAbi);
+            _swapChainSurface = MarshalInterface<ICompositionSurface>.FromAbi(surfaceAbi);
+            _videoBrush!.Surface = _swapChainSurface;
+
+            Logger?.LogDebug("D3D11 Swap Chain Created! {width}x{height} with format: {format}", RenderWidth, RenderHeight, desc.Format);
+        }
+        catch
+        {
+            ReleaseHdrSwapChain();
+            throw;
+        }
+        finally
+        {
+            if (surfaceAbi != nint.Zero) Marshal.Release(surfaceAbi);
+
+            ComMarshal<ICompositorSwapChainInterop>.FinalRelease(interop);
+            ComMarshal<IDXGISwapChain1>.FinalRelease(swapChain1);
+            ComMarshal<IDXGIFactory2>.FinalRelease(factory);
+        }
+    }
+
+    private unsafe void PresentHdrFrame()
+    {
+        nint backBuffer = 0;
+        try
+        {
+            // Release before Present/ResizeBuffers.
+            _swapChain!.GetBuffer(0, in IID_ID3D11Texture2D, out backBuffer);
+            _d3dContext!.CopySubresourceRegion(backBuffer, 0, 0, 0, 0, _frameTexture, 0, 0);
+        }
+        finally
+        {
+            if (backBuffer != 0) Marshal.Release(backBuffer);
+        }
+
+        // Present flushes the copy and submits the FP16 buffer without an SDR conversion.
+        _swapChain.Present(0, 0);
+    }
+
+    private void ReleaseHdrSwapChain()
+    {
+        if (_swapChainSurface != null)
+        {
+            _videoBrush?.Surface = null;
+            // This wrapper is exclusively owned by the presenter. Release its native
+            // reference after detaching so swap-chain buffers don't wait for a GC.
+            ((IWinRTObject)_swapChainSurface).NativeObject.Dispose();
+            _swapChainSurface = null;
+        }
+        if (_swapChain != null) ComMarshal<IDXGISwapChain3>.FinalRelease(Interlocked.Exchange(ref _swapChain, null));
+    }
+
     private unsafe void CreateFrameSurface()
     {
-        DXGI_FORMAT format = (DXGI_FORMAT)GetValue<DirectXPixelFormat>(PixelFormatProperty);
+        DXGI_FORMAT format = (DXGI_FORMAT)_pixelFormat;
         D3D11_TEXTURE2D_DESC desc = new()
         {
             Width      = (uint)RenderWidth,
@@ -700,13 +899,18 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
     {
         using (_renderLock.EnterScope())
         {
-            if (_disposed)
+            if (_disposed || !IsPresentationActive || _videoBrush == null)
                 return;
 
             try
             {
                 ReleaseDeviceResources();
                 CreateDeviceResources();
+            }
+            catch
+            {
+                ReleaseDeviceResources();
+                throw;
             }
             finally
             {
@@ -715,16 +919,27 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
         }
     }
 
-    private void ResizeDrawingSurface(
+    private unsafe void ResizeDrawingSurface(
         int width,
         int height)
     {
         ReleaseFrameSurface();
-        int hr = _drawingSurfaceInterop!.Resize(new SIZEL { Width = width, Height = height });
-        Marshal.ThrowExceptionForHR(hr);
+        if (_pixelFormat == DirectXPixelFormat.R16G16B16A16Float && _swapChain == null)
+        {
+            CreateHdrSwapChain(width, height);
+            RenderWidth  = width;
+            RenderHeight = height;
+            UpdateSurfaceBrushTransform();
+            CreateFrameSurface();
+            return;
+        }
+
+        (_swapChain?.ResizeBuffers(0, (uint)width, (uint)height, (DXGI_FORMAT)_pixelFormat, 0) ??
+         _drawingSurfaceInterop!.Resize(new SIZEL { Width = width, Height = height })).ThrowOnFailure();
 
         RenderWidth  = width;
         RenderHeight = height;
+        UpdateSurfaceBrushTransform();
         CreateFrameSurface();
 
         Logger?.LogDebug("Video Surface Resized: {width}x{height}", width, height);
@@ -734,7 +949,8 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
     {
         _videoBrush?.Surface = null;
         ReleaseFrameSurface();
-        ReleaseOwnedComObject(_drawingSurfaceInterop);
+        ReleaseHdrSwapChain();
+        ComMarshal.FinalRelease(_drawingSurfaceInterop);
         _drawingSurfaceInterop = null;
 
         // As we performed QueryInterface from the origin ABI. We release this one (but not with the origin too).
@@ -747,36 +963,10 @@ public sealed partial class MediaFoundationPresenter : FrameworkElement, IVideoF
 
         // Release the queried ID3D11DeviceContext
         if (_d3dContextAbi != nint.Zero) Marshal.Release(Interlocked.Exchange(ref _d3dContextAbi, nint.Zero));
-        ReleaseOwnedComObject(_d3dContext);
-        ReleaseOwnedComObject(_d3dDevice);
+        ComMarshal.FinalRelease(_d3dContext);
+        ComMarshal.FinalRelease(_d3dDevice);
         _d3dContext = null;
         _d3dDevice  = null;
         RenderWidth = RenderHeight = 0;
-    }
-
-    // All native wrappers owned by this presenter are created with useUnique: true.
-    private static void ReleaseOwnedComObject(object? value) => (value as ComObject)?.FinalRelease();
-
-    private T GetValue<T>(DependencyProperty property)
-    {
-        if (DispatcherQueue.HasThreadAccess)
-            return (T)GetValue(property);
-
-        TaskCompletionSource<T> tcs = new();
-        return !DispatcherQueue.TryEnqueue(GetValueInner)
-            ? throw new Exception("Cannot enqueue the value getter")
-            : tcs.Task.Result;
-
-        void GetValueInner()
-        {
-            try
-            {
-                tcs.SetResult((T)GetValue(property));
-            }
-            catch (Exception ex)
-            {
-                tcs.SetException(ex);
-            }
-        }
     }
 }

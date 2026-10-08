@@ -10,6 +10,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Windows.Media.Core;
 using Windows.Media.Playback;
 using Microsoft.UI.Xaml.Controls;
 using WinRT;
@@ -48,8 +49,7 @@ public sealed partial class MainWindow
 
     private async void Presenter_OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is not MediaFoundationPresenter presenter ||
-            presenter.Parent is not FrameworkElement { Tag: string searchPath } element ||
+        if (sender is not MediaFoundationPresenter { Parent: FrameworkElement { Tag: string searchPath } element } presenter ||
             string.IsNullOrEmpty(searchPath))
         {
             return;
@@ -81,10 +81,10 @@ public sealed partial class MainWindow
         };
         ((IWinRTObject)mediaPlayer).NativeObject.TryAs(IID_IMediaPlayer5, out nint mediaPlayerAbi);
 
-        Lock playbackLock = new();
+        Lock                    playbackLock         = new();
         CancellationTokenSource playbackCancellation = new();
-        CancellationToken playbackToken = playbackCancellation.Token;
-        FFmpegMediaSource? previousMediaSource = null;
+        CancellationToken       playbackToken        = playbackCancellation.Token;
+        MediaSource?            previousMediaSource  = null;
         presenter.Unloaded              += ElementOnUnloaded;
         element.PointerEntered          += ElementOnPointerEntered;
         element.PointerExited           += ElementOnPointerExited;
@@ -229,7 +229,7 @@ public sealed partial class MainWindow
         {
             try
             {
-                FFmpegMediaSource source = await PlayAsync(new Uri(samples[index]), mediaPlayer, playbackToken);
+                MediaSource source = await PlayAsync(new Uri(samples[index]), mediaPlayer, playbackToken);
                 if (playbackToken.IsCancellationRequested)
                     source.Dispose();
                 else
@@ -278,7 +278,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private static async Task<FFmpegMediaSource> PlayAsync(Uri uri, MediaPlayer mediaPlayer, CancellationToken cancellationToken)
+    private static async Task<MediaSource> PlayAsync(Uri uri, MediaPlayer mediaPlayer, CancellationToken cancellationToken)
     {
         MediaSourceConfig ffmpegConfig = new()
         {
@@ -296,11 +296,20 @@ public sealed partial class MainWindow
             }
         };
 
+        /*
         FFmpegMediaSource source =
             await (uri.IsFile
                 ? FFmpegMediaSource.CreateFromFileAsync(uri.LocalPath)
                 : FFmpegMediaSource.CreateFromUriAsync(uri.ToString(), ffmpegConfig));
+        */
 
+        MediaSource source = MediaSource.CreateFromUri(uri);
+        mediaPlayer.Source = source;
+        mediaPlayer.Play();
+
+        return source;
+
+        /*
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -314,5 +323,6 @@ public sealed partial class MainWindow
             source.Dispose();
             throw;
         }
+        */
     }
 }
